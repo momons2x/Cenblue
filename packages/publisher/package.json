@@ -1,0 +1,13 @@
+{
+  "name": "@cenblu/publisher",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@cenblu/database": "workspace:*",
+    "@cenblu/shared": "workspace:*",
+    "pino": "10.3.1",
+    "playwright": "1.61.1"
+  }
+}

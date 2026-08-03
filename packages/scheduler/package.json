@@ -1,0 +1,12 @@
+{
+  "name": "@cenblu/scheduler",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@cenblu/database": "workspace:*",
+    "node-cron": "4.6.0",
+    "pino": "10.3.1"
+  }
+}

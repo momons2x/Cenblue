@@ -1,0 +1,213 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model SourceAccount {
+  id                     String       @id @default(cuid())
+  username               String       @unique
+  displayName            String?
+  profileUrl             String
+  enabled                Boolean      @default(true)
+  managedSource          Boolean      @default(true)
+  collectLimit           Int          @default(5)
+  lastCollectedAt        DateTime?
+  lastCollectionFailedAt DateTime?
+  lastCollectionError    String?
+  archivedAt             DateTime?
+  captionTemplate        String?
+  attributionTemplate    String?
+  hashtagRules           String?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  posts                   SourcePost[]
+  collectionRunSources    CollectionRunSource[]
+
+  @@index([archivedAt])
+}
+
+model SourcePost {
+  id                String        @id @default(cuid())
+  platformPostId    String        @unique
+  sourceAccountId   String
+  sourceUrl         String        @unique
+  text              String
+  postedAt          DateTime
+  mediaType         String
+  discoveryKind     String        @default("PROFILE")
+  status            String        @default("QUEUED_FOR_DOWNLOAD")
+  collectedAt       DateTime      @default(now())
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  reviewNotes       String?
+  internalTags      String?
+  duplicateGroupId  String?
+  duplicateReason   String?
+  sourceAccount     SourceAccount @relation(fields: [sourceAccountId], references: [id], onDelete: Cascade)
+  downloadJob       DownloadJob?
+  mediaAsset        MediaAsset?
+  publishJob        PublishJob?
+  duplicateGroup    DuplicateGroup? @relation(fields: [duplicateGroupId], references: [id], onDelete: SetNull)
+
+  @@index([sourceAccountId, postedAt])
+  @@index([status])
+  @@index([discoveryKind])
+  @@index([duplicateGroupId])
+}
+
+model DownloadJob {
+  id            String     @id @default(cuid())
+  sourcePostId  String     @unique
+  status        String     @default("PENDING")
+  attemptCount  Int        @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  priority      Int        @default(0)
+  requestedAt   DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  sourcePost    SourcePost @relation(fields: [sourcePostId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+}
+
+model MediaAsset {
+  id              String     @id @default(cuid())
+  sourcePostId    String     @unique
+  filePath        String
+  thumbnailPath   String?
+  mimeType        String
+  fileSize        Int
+  durationSeconds Float
+  width           Int
+  height          Int
+  codec           String?
+  checksum        String
+  perceptualHash  String?
+  localRemovedAt  DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  sourcePost      SourcePost @relation(fields: [sourcePostId], references: [id], onDelete: Cascade)
+  publishJob      PublishJob?
+}
+
+model PublishJob {
+  id            String         @id @default(cuid())
+  sourcePostId  String         @unique
+  mediaAssetId  String         @unique
+  caption       String
+  status        String         @default("PENDING")
+  scheduledFor  DateTime?
+  attemptCount  Int            @default(0)
+  nextAttemptAt DateTime?
+  lastError     String?
+  startedAt     DateTime?
+  heartbeatAt   DateTime?
+  claimToken    String?
+  phase         String?
+  publishedAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  sourcePost    SourcePost     @relation(fields: [sourcePostId], references: [id], onDelete: Cascade)
+  mediaAsset    MediaAsset     @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
+  publishedPost PublishedPost?
+
+  @@index([status, scheduledFor, nextAttemptAt])
+  @@index([status, heartbeatAt])
+}
+
+model DuplicateGroup {
+  id                    String       @id @default(cuid())
+  canonicalSourcePostId String
+  detectionKind         String
+  similarity            Float?
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  posts                 SourcePost[]
+
+  @@index([canonicalSourcePostId])
+}
+
+model PublishedPost {
+  id             String     @id @default(cuid())
+  publishJobId   String     @unique
+  platformPostId String?    @unique
+  platformUrl    String?
+  publishedAt    DateTime
+  createdAt      DateTime   @default(now())
+  publishJob     PublishJob @relation(fields: [publishJobId], references: [id], onDelete: Cascade)
+}
+
+model SchedulerLock {
+  name        String   @id
+  ownerId     String
+  lockedUntil DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AppSetting {
+  key       String   @id
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CollectionRun {
+  id               String   @id @default(cuid())
+  status           String   @default("RUNNING")
+  totalSources     Int
+  completedSources Int      @default(0)
+  failedSources    Int      @default(0)
+  currentSource    String?
+  startedAt        DateTime @default(now())
+  completedAt      DateTime?
+  lastError        String?
+  cancelRequestedAt DateTime?
+  heartbeatAt       DateTime @default(now())
+  targetNew         Int      @default(0)
+  eligibleExamined  Int      @default(0)
+  knownSkipped      Int      @default(0)
+  newFound          Int      @default(0)
+  inserted          Int      @default(0)
+  contentDuplicates Int      @default(0)
+  sources           CollectionRunSource[]
+
+  @@index([status, startedAt])
+}
+
+model CollectionRunSource {
+  id                String        @id @default(cuid())
+  collectionRunId   String
+  sourceAccountId   String
+  status            String        @default("QUEUED")
+  targetNew         Int
+  eligibleExamined  Int           @default(0)
+  knownSkipped      Int           @default(0)
+  newFound          Int           @default(0)
+  inserted          Int           @default(0)
+  contentDuplicates Int           @default(0)
+  stopReason        String?
+  startedAt         DateTime?
+  completedAt       DateTime?
+  lastError         String?
+  collectionRun     CollectionRun @relation(fields: [collectionRunId], references: [id], onDelete: Cascade)
+  sourceAccount     SourceAccount @relation(fields: [sourceAccountId], references: [id], onDelete: Cascade)
+
+  @@unique([collectionRunId, sourceAccountId])
+  @@index([collectionRunId, status])
+}
+
+model RuntimeStatus {
+  component        String   @id
+  status           String   @default("IDLE")
+  currentOperation String?
+  lastError        String?
+  updatedAt        DateTime @updatedAt
+}
