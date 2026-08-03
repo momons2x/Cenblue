@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import pino from "pino";
 import { prisma, DownloadRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
-import { DownloadService, FfprobeService, MediaFiles, type ProcessRunner, type VideoDownloader, type VideoInspector, YtDlpService } from "@cenblu/downloader";
+import { DownloadService, FfmpegVideoCompressor, FfprobeService, MediaFiles, type ProcessRunner, type VideoDownloader, type VideoInspector, YtDlpService } from "@cenblu/downloader";
 
 const root = "storage/temp/downloader-test";
 const files = new MediaFiles(join(root, "videos"), join(root, "temp"), join(root, "thumbnails"));
@@ -59,6 +59,18 @@ describe("downloader services", () => {
     await expect(probe.inspect("video.mp4")).resolves.toEqual({ durationSeconds: 12.5, width: 1280, height: 720, codec: "h264" });
     const audioOnly = new FfprobeService(new FixtureRunner(JSON.stringify({ streams: [{ codec_type: "audio" }], format: {} })), "ffprobe");
     await expect(audioOnly.inspect("audio.mp3")).rejects.toThrow("valid video stream");
+  });
+
+  it("uses a balanced, web-compatible FFmpeg compression command", async () => {
+    let command = "";
+    let arguments_: string[] = [];
+    let timeout = 0;
+    const runner: ProcessRunner = { run: async (nextCommand, args, nextTimeout) => { command = nextCommand; arguments_ = args; timeout = nextTimeout; return { stdout: "", stderr: "" }; } };
+    await new FfmpegVideoCompressor(runner, "ffmpeg-custom").compress("input.mp4", "output.mp4");
+    expect(command).toBe("ffmpeg-custom");
+    expect(arguments_).toEqual(expect.arrayContaining(["libx264", "medium", "28", "aac", "128k", "+faststart"]));
+    expect(arguments_.at(-1)).toBe("output.mp4");
+    expect(timeout).toBe(30 * 60_000);
   });
 
   it("moves validated temporary media to deterministic final storage", async () => {

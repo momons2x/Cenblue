@@ -4,6 +4,12 @@ import { z } from "zod";
 
 const booleanFromEnvironment = z.enum(["true", "false"]).transform((value) => value === "true");
 
+export const storedConfigKeys = [
+  "COLLECTION_INTERVAL_MINUTES", "POSTS_PER_SOURCE", "PUBLISH_INTERVAL_MINUTES", "PLAYWRIGHT_HEADLESS",
+  "PUBLISH_MODE", "PUBLISH_MIN_UPLOAD_MBPS", "PUBLISH_MAX_UPLOAD_MINUTES", "DOWNLOAD_CONCURRENCY",
+  "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "CAPTION_TEMPLATES",
+] as const;
+
 const environmentSchema = z.object({
   CENBLU_ROOT: z.string().min(1),
   DATABASE_URL: z.string().min(1),
@@ -147,6 +153,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
 }
 
 export function applyStoredSettings(config: AppConfig, settings: Record<string, string>): AppConfig {
+  const allowedSettings = Object.fromEntries(storedConfigKeys.flatMap((key) => settings[key] === undefined ? [] : [[key, settings[key]]]));
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
     CENBLU_ROOT: config.repositoryRoot,
@@ -167,7 +174,7 @@ export function applyStoredSettings(config: AppConfig, settings: Record<string, 
     YTDLP_BINARY: config.ytDlpBinary,
     FFMPEG_BINARY: config.ffmpegBinary,
     FFPROBE_BINARY: config.ffprobeBinary,
-    ...settings,
+    ...allowedSettings,
   };
   return loadConfig(environment);
 }

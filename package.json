@@ -13,6 +13,7 @@
   "packageManager": "pnpm@10.12.1",
   "scripts": {
     "dev": "pnpm --filter @cenblu/dashboard dev",
+    "setup": "tsx workers/setup.worker.ts",
     "build": "pnpm --filter @cenblu/dashboard build",
     "lint": "eslint apps packages workers tests vitest.config.ts",
     "typecheck": "tsc --noEmit && pnpm --filter @cenblu/dashboard typecheck",
@@ -39,6 +40,8 @@
     "storage:audit": "tsx workers/maintenance.worker.ts audit",
     "storage:clean": "tsx workers/maintenance.worker.ts clean-temp",
     "db:backup": "tsx workers/maintenance.worker.ts backup",
+    "config:export": "tsx workers/config.worker.ts export",
+    "config:import": "tsx workers/config.worker.ts import",
     "hardening:smoke": "cross-env DATABASE_URL=file:../../../storage/temp/cenblu-hardening-smoke.db prisma migrate deploy --schema packages/database/prisma/schema.prisma && cross-env DATABASE_URL=file:../../../storage/temp/cenblu-hardening-smoke.db tsx tests/hardening.smoke.ts",
     "db:migrate": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
     "db:studio": "prisma studio --schema packages/database/prisma/schema.prisma"

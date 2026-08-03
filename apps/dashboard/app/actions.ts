@@ -2,15 +2,15 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { access, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
-import { resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import { z } from "zod";
 import { CollectionService, PlaywrightTimelineBrowser, XPlaywrightCollector } from "@cenblu/collector";
 import { applyStoredSettings, loadConfig } from "@cenblu/config";
 import { CollectionRunRepository, DatabaseExclusiveLease, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
-import { DownloadService, FfmpegPerceptualVideoHasher, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
+import { DownloadService, FfmpegPerceptualVideoHasher, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
 import { FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
 import { LocalPublishMediaVerifier, PublishService, resolveCaption, validateCaption, XPlaywrightPublisher } from "@cenblu/publisher";
 import { ResourceBusyError } from "@cenblu/shared/lease";
@@ -22,6 +22,11 @@ const limit = z.coerce.number().int().min(1).max(100);
 const manualImageTypes = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" } as const;
 
 function refresh(...paths: string[]) { paths.forEach((path) => revalidatePath(path)); }
+
+function inside(root: string, path: string): boolean {
+  const value = relative(resolve(root), resolve(path));
+  return value !== "" && !value.startsWith("..") && !value.includes(":");
+}
 
 function validImageSignature(type: keyof typeof manualImageTypes, bytes: Uint8Array): boolean {
   if (type === "image/jpeg") return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
@@ -205,6 +210,56 @@ export async function saveReview(formData: FormData) {
     prisma.sourcePost.update({ where: { id: job.sourcePostId }, data: { reviewNotes: z.string().max(2_000).parse(formData.get("reviewNotes") ?? ""), internalTags: z.string().max(500).parse(formData.get("internalTags") ?? "") } }),
   ]);
   refresh("/review");
+}
+
+export async function compressReviewVideo(formData: FormData) {
+  const publishJobId = id.parse(formData.get("publishJobId"));
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, include: { sourcePost: true, mediaAsset: true } });
+  if (!["READY_FOR_REVIEW", "MANUAL_ATTENTION", "FAILED"].includes(job.status)) throw new Error("Only videos awaiting review can be compressed.");
+  if (job.mediaAsset.localRemovedAt) throw new Error("The local video is unavailable.");
+  if (!inside(config.videoStoragePath, job.mediaAsset.filePath)) throw new Error("Media path is outside configured video storage.");
+  if (basename(job.mediaAsset.filePath).includes(".compressed-")) throw new Error("This review video has already been compressed.");
+
+  const runner = new NodeProcessRunner();
+  const token = randomUUID();
+  const temporaryPath = resolve(config.tempStoragePath, `${job.sourcePost.platformPostId}.${token}.compress.part.mp4`);
+  const finalPath = resolve(config.videoStoragePath, `${job.sourcePost.platformPostId}.compressed-${token}.mp4`);
+  if (!inside(config.tempStoragePath, temporaryPath) || !inside(config.videoStoragePath, finalPath)) throw new Error("Invalid compression output path.");
+
+  await Promise.all([mkdir(config.tempStoragePath, { recursive: true }), mkdir(config.videoStoragePath, { recursive: true })]);
+  let moved = false;
+  let databaseUpdated = false;
+  let originalSize = 0;
+  let compressedSize = 0;
+  try {
+    originalSize = (await stat(job.mediaAsset.filePath)).size;
+    await new FfmpegVideoCompressor(runner, config.ffmpegBinary).compress(job.mediaAsset.filePath, temporaryPath);
+    const files = new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath);
+    compressedSize = await files.fileSize(temporaryPath);
+    if (compressedSize >= originalSize) {
+      await rm(temporaryPath, { force: true });
+      return redirect("/review?compression=not-smaller");
+    }
+    const probe = new FfprobeService(runner, config.ffprobeBinary);
+    const metadata = await probe.inspect(temporaryPath);
+    const checksum = await files.checksum(temporaryPath);
+    const perceptualHash = await new FfmpegPerceptualVideoHasher(runner, config.ffmpegBinary).hash(temporaryPath);
+    await rename(temporaryPath, finalPath);
+    moved = true;
+    const updated = await prisma.mediaAsset.updateMany({
+      where: { id: job.mediaAsset.id, filePath: job.mediaAsset.filePath, localRemovedAt: null },
+      data: { filePath: finalPath, fileSize: compressedSize, ...metadata, checksum, perceptualHash },
+    });
+    if (updated.count !== 1) throw new Error("The video changed while compression was running. Try again.");
+    databaseUpdated = true;
+    await rm(job.mediaAsset.filePath, { force: true }).catch(() => undefined);
+  } catch (error) {
+    if (!databaseUpdated) await rm(moved ? finalPath : temporaryPath, { force: true });
+    throw error;
+  }
+  refresh("/review", "/downloads", "/videos", "/queue");
+  redirect(`/review?compression=saved&before=${originalSize}&after=${compressedSize}`);
 }
 
 export async function approveReview(formData: FormData) {

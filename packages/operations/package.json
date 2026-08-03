@@ -6,6 +6,7 @@
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@cenblu/database": "workspace:*",
-    "@prisma/client": "^6.19.0"
+    "@prisma/client": "^6.19.0",
+    "zod": "4.4.3"
   }
 }

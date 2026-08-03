@@ -2,7 +2,7 @@ import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
-import { MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
+import { MediaRemovalService, PortableConfigService, SourcePurgeService } from "@cenblu/operations";
 
 const root = resolve("storage/temp/source-purge-test");
 const videos = resolve(root, "videos");
@@ -10,12 +10,40 @@ const thumbnails = resolve(root, "thumbnails");
 const temporary = resolve(root, "temporary");
 
 beforeEach(async () => {
+  await prisma.appSetting.deleteMany();
   await prisma.publishedPost.deleteMany();
   await prisma.publishJob.deleteMany();
   await prisma.mediaAsset.deleteMany();
   await prisma.downloadJob.deleteMany();
   await prisma.sourcePost.deleteMany();
   await prisma.sourceAccount.deleteMany();
+});
+
+describe("portable preferences", () => {
+  it("exports and imports only portable settings and managed source rules", async () => {
+    await prisma.appSetting.createMany({ data: [
+      { key: "CAPTION_TEMPLATES", value: "{sourceCaption}\n\nShared" },
+      { key: "PUBLISHER_BROWSER_SESSION_VERIFIED_AT", value: new Date().toISOString() },
+      { key: "VIDEO_STORAGE_PATH", value: "C:/private/videos" },
+    ] });
+    await new SourceAccountRepository(prisma).create({ username: "portable", collectLimit: 9, captionTemplate: "Caption", hashtagRules: "#tag" });
+    const service = new PortableConfigService(prisma);
+    const exported = await service.export();
+    expect(exported.settings).toEqual({ CAPTION_TEMPLATES: "{sourceCaption}\n\nShared" });
+    expect(exported.sources[0]).toMatchObject({ username: "portable", collectLimit: 9, captionTemplate: "Caption", hashtagRules: "#tag" });
+
+    await prisma.appSetting.deleteMany();
+    await prisma.sourceAccount.deleteMany();
+    await prisma.appSetting.create({ data: { key: "COLLECTOR_BROWSER_SESSION_VERIFIED_AT", value: new Date().toISOString() } });
+    expect(await service.import(exported)).toEqual({ settings: 1, sources: 1 });
+    expect(await prisma.appSetting.findUnique({ where: { key: "COLLECTOR_BROWSER_SESSION_VERIFIED_AT" } })).toBeNull();
+    expect(await prisma.sourceAccount.findUniqueOrThrow({ where: { username: "portable" } })).toMatchObject({ managedSource: true, enabled: true, collectLimit: 9 });
+  });
+
+  it("rejects machine paths and unknown fields in imported manifests", async () => {
+    const service = new PortableConfigService(prisma);
+    await expect(service.import({ version: 1, exportedAt: new Date().toISOString(), settings: { VIDEO_STORAGE_PATH: "C:/videos" }, sources: [] })).rejects.toThrow();
+  });
 });
 afterAll(async () => {
   await rm(root, { recursive: true, force: true });

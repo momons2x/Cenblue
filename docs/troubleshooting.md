@@ -17,3 +17,9 @@ Confirm `DATABASE_URL` points to the intended file. A zero-byte database is not 
 ## Media Failures
 
 Verify the external tools, storage paths, free space, and checksums. Run `pnpm storage:audit`; do not manually rewrite database file paths unless the corresponding files have been moved safely.
+
+If Review compression fails, confirm that FFmpeg and FFprobe execute from the configured paths and that both `storage/temp` and `storage/videos` have sufficient free space. The original remains active unless the validated smaller candidate was committed. A "not smaller" result is expected for media that is already efficiently encoded.
+
+## Setup And Import Failures
+
+`pnpm setup` preserves the replaced environment as `.env.previous`. If setup is interrupted, inspect both files before retrying. Portable imports accept only the documented versioned schema; remove machine paths, session fields, media references, and unknown keys rather than bypassing validation. After every import, establish fresh browser sessions and rerun both session checks.

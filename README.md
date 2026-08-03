@@ -34,10 +34,10 @@ Set-Location Cenblue
 corepack enable
 corepack prepare pnpm@10.12.1 --activate
 pnpm install --frozen-lockfile
-Copy-Item .env.example .env
+pnpm setup
 ```
 
-Set `CENBLU_ROOT` in `.env` to the absolute checkout path. The default SQLite URL is relative to the Prisma schema and resolves to `storage/cenblu.db`.
+The guided setup detects the repository and media binaries, creates runtime storage, writes the ignored local `.env`, applies database migrations, and can walk through fresh collector and publisher sessions. Manual `.env` setup remains available through `.env.example`.
 
 ## Storage Setup
 
@@ -79,6 +79,17 @@ The complete `storage/` tree is ignored by Git except its placeholder. Never for
 | `BACKUP_STORAGE_PATH` | SQLite snapshot directory |
 
 Dashboard settings override corresponding `.env` values. Restart the dashboard after changing `.env`, especially browser profile paths.
+
+### Portable Preferences
+
+Move non-secret preferences and managed source rules to another device without copying browser credentials or machine paths:
+
+```powershell
+pnpm config:export
+pnpm config:import .\cenblu-preferences.json
+```
+
+The versioned manifest excludes videos, thumbnails, operational history, browser profiles, session-verification timestamps, logs, and absolute paths. Run `pnpm setup` and log into both isolated X profiles separately on every device.
 
 ## Browser Profiles
 
@@ -150,6 +161,8 @@ Open <http://127.0.0.1:3000>. Dashboard scripts explicitly bind to loopback; thi
 4. Edit captions and approve posts under **Review**.
 5. Publish manually or assign a future schedule.
 6. Inspect successful output under **Published**.
+
+Review uses compact cards for size, duration, and caption scanning. Open a card to preview the video, save caption drafts, schedule approval, or run optional balanced FFmpeg compression. Compression validates a new MP4 and replaces the active file only when the result is smaller.
 
 The **Compose** page publishes original text or one image through the publisher profile without creating a video pipeline job.
 
