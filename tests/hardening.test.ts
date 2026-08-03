@@ -25,6 +25,7 @@ describe("hardening", () => {
     expect(applyStoredSettings(config, { VIDEO_STORAGE_PATH: "C:/untrusted/videos" }).videoStoragePath).toBe(config.videoStoragePath);
     expect(() => applyStoredSettings(config, { DOWNLOAD_CONCURRENCY: "20" })).toThrow();
     expect(() => applyStoredSettings(config, { DOWNLOAD_BATCH_LIMIT: "0" })).toThrow();
+    expect(() => loadConfig({ CENBLU_ROOT: root, DATABASE_URL: "file:test.db", APP_TIMEZONE: "Not/A-Timezone" })).toThrow("IANA timezone");
   });
 
   it("requires explicit opt-in before using an external browser profile", () => {

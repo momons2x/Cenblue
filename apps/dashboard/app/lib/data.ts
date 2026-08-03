@@ -1,7 +1,7 @@
 import "server-only";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, resolve } from "node:path";
-import { loadConfig } from "@cenblu/config";
+import { applyStoredSettings, loadConfig } from "@cenblu/config";
 import { prisma, SettingsRepository } from "@cenblu/database";
 
 export async function getOverview() {
@@ -21,14 +21,14 @@ export async function getOverview() {
     new SettingsRepository(prisma).getAll(),
     prisma.publishedPost.findMany({ where: { publishedAt: { gte: new Date(Date.now() - 48 * 60 * 60_000) } }, select: { publishedAt: true } }),
   ]);
-  const config = loadConfig();
+  const config = applyStoredSettings(loadConfig(), settings);
   const day = new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(new Date());
   const todayPosts = publishedForGoal.filter((post) => new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(post.publishedAt) === day).length;
   const dailyMinimum = Number(settings.DAILY_POST_MINIMUM ?? 2);
   const dailyPreferred = Number(settings.DAILY_POST_PREFERRED ?? 3);
   const collectorBrowserBusy = Boolean(collectorBrowserLock && collectorBrowserLock.lockedUntil > new Date());
   const publisherBrowserBusy = Boolean(publisherBrowserLock && publisherBrowserLock.lockedUntil > new Date());
-  return { enabledSources, recentlyCollected, pendingDownloads, failedDownloads, scheduledPublishes, failedPublishes, recentPublished, lastCollectedAt: lastSource?.lastCollectedAt ?? null, collectionRun, browserBusy: collectorBrowserBusy || publisherBrowserBusy, collectorBrowserBusy, publisherBrowserBusy, runtime, todayPosts, dailyMinimum, dailyPreferred };
+  return { enabledSources, recentlyCollected, pendingDownloads, failedDownloads, scheduledPublishes, failedPublishes, recentPublished, lastCollectedAt: lastSource?.lastCollectedAt ?? null, collectionRun, browserBusy: collectorBrowserBusy || publisherBrowserBusy, collectorBrowserBusy, publisherBrowserBusy, runtime, todayPosts, dailyMinimum, dailyPreferred, timezone: config.timezone };
 }
 
 export async function getSources() {
@@ -86,6 +86,7 @@ export async function getSettings() {
     downloadBatchLimit: stored.DOWNLOAD_BATCH_LIMIT ?? String(config.downloadBatchLimit),
     sourceAccountLimit: stored.SOURCE_ACCOUNT_LIMIT ?? String(config.sourceAccountLimit),
     captionTemplates: stored.CAPTION_TEMPLATES ?? config.captionTemplates,
+    timezone: stored.APP_TIMEZONE ?? config.timezone,
     dailyMinimum: stored.DAILY_POST_MINIMUM ?? "2",
     dailyPreferred: stored.DAILY_POST_PREFERRED ?? "3",
     repositoryRoot: config.repositoryRoot,

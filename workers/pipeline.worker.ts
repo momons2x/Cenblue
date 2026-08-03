@@ -26,15 +26,20 @@ async function main(): Promise<void> {
     new FfprobeService(processRunner, config.ffprobeBinary), new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath), logger, 3,
     new FfmpegPerceptualVideoHasher(processRunner, config.ffmpegBinary),
   );
+  const publishRepository = new PublishRepository(prisma);
   const publisher = new PublishService(
-    new PublishRepository(prisma),
+    publishRepository,
     new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: config.publisherProfilePath, browserChannel: config.playwrightBrowserChannel, browserProfileDirectory: config.publisherProfileDirectory, allowExternalProfile: config.playwrightAllowExternalProfile, lease: publisherLease, diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000 }, logger),
     new LocalPublishMediaVerifier(config.videoStoragePath), logger, config.publishAllowEmptyCaption,
   );
   const pipeline = new PipelineService(new SchedulerRepository(prisma), {
     collect: async () => { await collector.runOnce(); },
     download: async () => downloader.processPending(config.downloadConcurrency, config.downloadBatchLimit),
-    publish: async () => config.publishMode === "AUTOMATIC" && Boolean(storedSettings.PUBLISHER_BROWSER_SESSION_VERIFIED_AT) ? publisher.processNext() : false,
+    publish: async () => {
+      if (config.publishMode !== "AUTOMATIC" || !storedSettings.PUBLISHER_BROWSER_SESSION_VERIFIED_AT) return false;
+      const [jobId] = await publishRepository.findDueScheduledIds(new Date(), 1);
+      return jobId ? publisher.processJob(jobId) : false;
+    },
   }, logger, config.publishIntervalMinutes, config.workerLockTimeoutMinutes * 60_000, (source) => resolveCaption(source, config.captionTemplates));
 
   if (process.argv[2] === "--once") {

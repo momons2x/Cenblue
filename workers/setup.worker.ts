@@ -39,6 +39,8 @@ async function main(): Promise<void> {
 
     const browserAnswer = (await terminal.question("Browser channel [msedge/chrome] (msedge): ")).trim().toLowerCase();
     const browser = browserAnswer === "chrome" ? "chrome" : "msedge";
+    const timezone = (await terminal.question("Application timezone (Asia/Jakarta): ")).trim() || "Asia/Jakarta";
+    try { new Intl.DateTimeFormat("en", { timeZone: timezone }); } catch { throw new Error(`Invalid IANA timezone: ${timezone}`); }
     const binaries: Record<string, string> = {};
     for (const binary of ["yt-dlp", "ffmpeg", "ffprobe"]) {
       if (await available(binary)) binaries[binary] = binary;
@@ -54,7 +56,7 @@ async function main(): Promise<void> {
     const environment = [
       `CENBLU_ROOT=${quote(root)}`,
       "DATABASE_URL=\"file:../../../storage/cenblu.db\"",
-      "APP_TIMEZONE=\"Asia/Jakarta\"",
+      `APP_TIMEZONE=${quote(timezone)}`,
       "PLAYWRIGHT_HEADLESS=false",
       "PLAYWRIGHT_PROFILE_PATH=\"./storage/browser-profile-collector\"",
       "PLAYWRIGHT_PROFILE_DIRECTORY=\"Default\"",

@@ -4,7 +4,7 @@ import { z } from "zod";
 export const portableSettingKeys = [
   "COLLECTION_INTERVAL_MINUTES", "POSTS_PER_SOURCE", "PUBLISH_INTERVAL_MINUTES", "PLAYWRIGHT_HEADLESS",
   "PUBLISH_MODE", "PUBLISH_MIN_UPLOAD_MBPS", "PUBLISH_MAX_UPLOAD_MINUTES", "DOWNLOAD_CONCURRENCY",
-  "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "DAILY_POST_MINIMUM", "DAILY_POST_PREFERRED", "CAPTION_TEMPLATES",
+  "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "DAILY_POST_MINIMUM", "DAILY_POST_PREFERRED", "CAPTION_TEMPLATES", "APP_TIMEZONE",
 ] as const;
 
 const settingsSchema = z.object({
@@ -21,6 +21,7 @@ const settingsSchema = z.object({
   DAILY_POST_MINIMUM: z.coerce.number().int().min(0).max(20).transform(String).optional(),
   DAILY_POST_PREFERRED: z.coerce.number().int().min(0).max(20).transform(String).optional(),
   CAPTION_TEMPLATES: z.string().max(10_000).optional(),
+  APP_TIMEZONE: z.string().min(1).refine((value) => { try { new Intl.DateTimeFormat("en", { timeZone: value }); return true; } catch { return false; } }, "Invalid IANA timezone").optional(),
 }).strict();
 
 const sourceSchema = z.object({

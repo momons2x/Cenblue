@@ -162,7 +162,7 @@ Open <http://127.0.0.1:3000>. Dashboard scripts explicitly bind to loopback; thi
 5. Publish manually or assign a future schedule.
 6. Inspect successful output under **Published**.
 
-Review uses compact cards for size, duration, and caption scanning. Open a card to preview the video, save caption drafts, schedule approval, or run optional balanced FFmpeg compression. Compression validates a new MP4 and replaces the active file only when the result is smaller.
+Review uses responsive compact cards for size, duration, and caption scanning. Long captions wrap safely and can expand in place. Open a card to preview the video, save caption drafts, schedule approval, or run optional balanced FFmpeg compression. Compression shows an in-modal activity bar, validates a new MP4, and replaces the active file only when the result is smaller.
 
 The **Compose** page publishes original text or one image through the publisher profile without creating a video pipeline job.
 
@@ -178,6 +178,8 @@ Automatic scheduled publishing requires all of the following:
 - Valid local media and caption data.
 
 The dashboard checks due jobs every 30 seconds. Future jobs remain untouched. Do not run the recurring dashboard publisher and `pnpm pipeline` as competing scheduler owners unless you understand the lease behavior.
+
+All schedule controls use the configured `APP_TIMEZONE`, a custom cross-browser calendar, and 15-minute time steps. Approval without a date is manual-only and requires the Queue's explicit **Publish now** action; automatic workers process only due jobs with a schedule.
 
 ## Commands
 

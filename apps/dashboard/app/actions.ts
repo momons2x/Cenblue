@@ -15,6 +15,7 @@ import { FullResetService, MediaRemovalService, SourcePurgeService } from "@cenb
 import { LocalPublishMediaVerifier, PublishService, resolveCaption, validateCaption, XPlaywrightPublisher } from "@cenblu/publisher";
 import { ResourceBusyError } from "@cenblu/shared/lease";
 import pino from "pino";
+import { scheduleFromFields } from "./lib/schedule";
 
 const username = z.string().trim().regex(/^[A-Za-z0-9_]{1,15}$/);
 const id = z.string().min(1);
@@ -194,8 +195,9 @@ export async function cancelCollection(formData: FormData) {
 
 export async function schedulePublish(formData: FormData) {
   const publishJobId = id.parse(formData.get("publishJobId"));
-  const scheduledFor = new Date(z.string().parse(formData.get("scheduledFor")));
-  if (Number.isNaN(scheduledFor.getTime())) throw new Error("Enter a valid schedule time.");
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const scheduledFor = scheduleFromFields(formData, config.timezone, false);
+  if (!scheduledFor) throw new Error("Choose a schedule date.");
   if (scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
   await new PublishRepository(prisma).reschedule(publishJobId, scheduledFor);
   refresh("/", "/queue");
@@ -264,9 +266,8 @@ export async function compressReviewVideo(formData: FormData) {
 
 export async function approveReview(formData: FormData) {
   const publishJobId = id.parse(formData.get("publishJobId"));
-  const rawSchedule = z.string().parse(formData.get("scheduledFor") ?? "").trim();
-  const scheduledFor = rawSchedule ? new Date(rawSchedule) : null;
-  if (scheduledFor && Number.isNaN(scheduledFor.getTime())) throw new Error("Enter a valid schedule time.");
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const scheduledFor = scheduleFromFields(formData, config.timezone, true);
   if (scheduledFor && scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
   const caption = z.string().max(280).parse(formData.get("caption"));
   await new PublishRepository(prisma).approve(publishJobId, scheduledFor, caption, { notes: z.string().max(2_000).parse(formData.get("reviewNotes") ?? ""), tags: z.string().max(500).parse(formData.get("internalTags") ?? "") });
@@ -296,9 +297,10 @@ export async function bulkReview(formData: FormData) {
   const decision = z.enum(["approve", "reject", "downloads"]).parse(formData.get("decision"));
   const repository = new PublishRepository(prisma);
   if (decision === "approve") {
-    const scheduledFor = new Date(z.string().parse(formData.get("scheduledFor")));
-    if (Number.isNaN(scheduledFor.getTime()) || scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
-    for (const jobId of jobIds) await repository.approve(jobId, scheduledFor);
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const scheduledFor = scheduleFromFields(formData, config.timezone, true);
+    if (scheduledFor && scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
+    await repository.approveMany(jobIds, scheduledFor);
   } else if (decision === "reject") {
     for (const jobId of jobIds) await repository.reject(jobId);
   } else {
@@ -555,6 +557,8 @@ export async function bulkDownloadAction(formData: FormData) {
 }
 
 export async function saveSettings(formData: FormData) {
+  const timezone = z.string().min(1).parse(formData.get("timezone"));
+  try { new Intl.DateTimeFormat("en", { timeZone: timezone }); } catch { throw new Error("Enter a valid IANA timezone such as Asia/Jakarta."); }
   const values = {
     COLLECTION_INTERVAL_MINUTES: String(z.coerce.number().int().min(1).max(59).parse(formData.get("collectionIntervalMinutes"))),
     POSTS_PER_SOURCE: String(z.coerce.number().int().min(1).max(100).parse(formData.get("postsPerSource"))),
@@ -568,6 +572,7 @@ export async function saveSettings(formData: FormData) {
     SOURCE_ACCOUNT_LIMIT: String(z.coerce.number().int().min(1).max(100).parse(formData.get("sourceAccountLimit"))),
     DAILY_POST_MINIMUM: String(z.coerce.number().int().min(0).max(20).parse(formData.get("dailyMinimum"))),
     DAILY_POST_PREFERRED: String(z.coerce.number().int().min(0).max(20).parse(formData.get("dailyPreferred"))),
+    APP_TIMEZONE: timezone,
   };
   await new SettingsRepository(prisma).setMany(values);
   refresh("/settings", "/");

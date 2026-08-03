@@ -29,7 +29,11 @@ Import merges managed sources and invalidates collector and publisher session-ve
 
 ## Review Compression
 
-Compression is a manual Review action and may run for several minutes. Do not stop the dashboard while FFmpeg is active. Cenblue keeps the original active while producing and validating the candidate, discards candidates that are not smaller, and disables repeat compression after a successful replacement. Run `pnpm storage:audit` if the process or machine stops during file replacement.
+Compression is a manual Review action and may run for several minutes. The modal displays an activity bar and locks conflicting actions until FFmpeg, validation, and file replacement finish. Do not stop the dashboard while FFmpeg is active. Cenblue keeps the original active while producing and validating the candidate, discards candidates that are not smaller, and disables repeat compression after a successful replacement. Run `pnpm storage:audit` if the process or machine stops during file replacement.
+
+## Scheduling
+
+Set a valid IANA `APP_TIMEZONE` in Settings before relying on automatic publishing. The Review and Queue calendars use that timezone on every device and offer 15-minute steps. A blank Review schedule is manual-only; use **Publish now** from Queue when ready. Automatic dashboard and pipeline owners process only due jobs with a non-null schedule.
 
 ## Restore Outline
 

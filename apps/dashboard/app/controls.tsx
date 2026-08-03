@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useEffect, useState } from "react";
+import { startTransition, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -42,14 +42,19 @@ export function Navigation({ items }: { items: readonly (readonly [string, strin
   return <nav aria-label="Main navigation">{items.map(([label, href]) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined} className={pathname === href ? "active" : undefined}><span className="nav-dot" aria-hidden="true" />{label}</Link>)}</nav>;
 }
 
-export function SubmitButton({ children, className = "small-button", pending = "Working…" }: { children: React.ReactNode; className?: string; pending?: string }) {
+export function SubmitButton({ children, className = "small-button", pending = "Working…", ...props }: { children: React.ReactNode; className?: string; pending?: string } & Omit<React.ComponentPropsWithoutRef<"button">, "type">) {
   const { pending: isPending } = useFormStatus();
-  return <button className={className} type="submit" disabled={isPending}>{isPending ? pending : children}</button>;
+  return <button {...props} className={className} type="submit" disabled={isPending || props.disabled}>{isPending ? pending : children}</button>;
 }
 
 export function ConfirmSubmitButton({ children, message, className = "small-button danger-button", pendingLabel = "Working…", ...props }: { children: React.ReactNode; message: string; className?: string; pendingLabel?: string } & React.ComponentPropsWithoutRef<"button">) {
   const { pending } = useFormStatus();
-  return <details className="confirm-submit"><summary className={className}>{children}</summary><small className="confirm-hint">{message}</small><button {...props} className={className} type="submit" disabled={pending}>{pending ? pendingLabel : "Confirm action"}</button></details>;
+  const [confirming, setConfirming] = useState(false);
+  if (!confirming) return <button className={className} type="button" disabled={pending || props.disabled} onClick={() => setConfirming(true)}>{children}</button>;
+  return <span className="grid max-w-80 gap-2 rounded-sm border border-warning/40 bg-warning/10 p-3">
+    <small className="whitespace-pre-line text-xs leading-relaxed text-warning">{message}</small>
+    <span className="flex flex-wrap gap-2"><button {...props} className={className} type="submit" disabled={pending || props.disabled}>{pending ? pendingLabel : "Confirm action"}</button><button className="small-button" type="button" disabled={pending} onClick={() => setConfirming(false)}>Keep</button></span>
+  </span>;
 }
 
 type CollectionRun = { id: string; status: string; totalSources: number; completedSources: number; failedSources: number; currentSource: string | null; lastError: string | null; cancelRequestedAt: string | null; targetNew: number; newFound: number; eligibleExamined: number; knownSkipped: number; inserted: number; sources: { status: string; targetNew: number; newFound: number; eligibleExamined: number; knownSkipped: number; sourceAccount: { username: string } }[] };
@@ -130,5 +135,11 @@ export function PostPerformanceReport({ publishedPostId, result }: { publishedPo
 
 export function DiagnosticGallery({ images }: { images: string[] }) {
   const [selected, setSelected] = useState<string | null>(null);
-  return <><div className="diagnostic-grid">{images.map((image) => <button className="diagnostic-thumb" type="button" key={image} onClick={() => setSelected(image)}><img src={`/diagnostics/${encodeURIComponent(image)}`} alt={`Diagnostic screenshot ${image}`} /><small>{image}</small></button>)}</div>{selected && <div className="lightbox" role="dialog" aria-modal="true" aria-label={`Diagnostic screenshot ${selected}`} onClick={() => setSelected(null)}><button className="lightbox-close" type="button" onClick={() => setSelected(null)}>Close preview</button><img src={`/diagnostics/${encodeURIComponent(selected)}`} alt={`Diagnostic screenshot ${selected}`} onClick={(event) => event.stopPropagation()} /></div>}</>;
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (selected && dialog && !dialog.open) dialog.showModal();
+    if (!selected && dialog?.open) dialog.close();
+  }, [selected]);
+  return <><div className="diagnostic-grid">{images.map((image) => <button className="diagnostic-thumb" type="button" key={image} onClick={() => setSelected(image)}><img src={`/diagnostics/${encodeURIComponent(image)}`} alt={`Diagnostic screenshot ${image}`} /><small className="[overflow-wrap:anywhere]">{image}</small></button>)}</div><dialog ref={dialogRef} className="m-auto max-h-[calc(100dvh-1rem)] max-w-[calc(100vw-1rem)] overflow-auto rounded-sm border border-line bg-surface p-0 text-ink backdrop:bg-black/70" aria-label={selected ? `Diagnostic screenshot ${selected}` : "Diagnostic screenshot"} onClose={() => setSelected(null)} onCancel={() => setSelected(null)}>{selected && <div className="grid gap-4 p-4"><button className="small-button justify-self-end" type="button" onClick={() => dialogRef.current?.close()}>Close preview</button><img className="max-h-[82dvh] max-w-full" src={`/diagnostics/${encodeURIComponent(selected)}`} alt={`Diagnostic screenshot ${selected}`} /></div>}</dialog></>;
 }

@@ -3,17 +3,18 @@ import { relative, resolve } from "node:path";
 import { z } from "zod";
 
 const booleanFromEnvironment = z.enum(["true", "false"]).transform((value) => value === "true");
+const timeZone = z.string().min(1).refine((value) => { try { new Intl.DateTimeFormat("en", { timeZone: value }); return true; } catch { return false; } }, "Enter a valid IANA timezone");
 
 export const storedConfigKeys = [
   "COLLECTION_INTERVAL_MINUTES", "POSTS_PER_SOURCE", "PUBLISH_INTERVAL_MINUTES", "PLAYWRIGHT_HEADLESS",
   "PUBLISH_MODE", "PUBLISH_MIN_UPLOAD_MBPS", "PUBLISH_MAX_UPLOAD_MINUTES", "DOWNLOAD_CONCURRENCY",
-  "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "CAPTION_TEMPLATES",
+  "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "CAPTION_TEMPLATES", "APP_TIMEZONE",
 ] as const;
 
 const environmentSchema = z.object({
   CENBLU_ROOT: z.string().min(1),
   DATABASE_URL: z.string().min(1),
-  APP_TIMEZONE: z.string().default("Asia/Jakarta"),
+  APP_TIMEZONE: timeZone.default("Asia/Jakarta"),
   PLAYWRIGHT_HEADLESS: booleanFromEnvironment.default(false),
   PLAYWRIGHT_PROFILE_PATH: z.string().min(1).default("./storage/browser-profile"),
   PLAYWRIGHT_PROFILE_SOURCE_PATH: z.string().min(1).optional(),

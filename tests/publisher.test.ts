@@ -160,6 +160,23 @@ describe("publisher", () => {
     expect(await prisma.sourcePost.findUniqueOrThrow({ where: { platformPostId: "40001" } })).toMatchObject({ status: "PUBLISHED" });
   });
 
+  it("approves selected review jobs atomically with a shared schedule", async () => {
+    await publishablePost("40021");
+    await publishablePost("40022");
+    const posts = await prisma.sourcePost.findMany({ where: { platformPostId: { in: ["40021", "40022"] } }, include: { mediaAsset: true } });
+    const jobs = [];
+    for (const post of posts) jobs.push(await prisma.publishJob.create({ data: { sourcePostId: post.id, mediaAssetId: post.mediaAsset!.id, caption: post.text, status: "READY_FOR_REVIEW" } }));
+    const repository = new PublishRepository(prisma);
+    const schedule = new Date("2026-08-04T02:15:00.000Z");
+    await repository.approveMany(jobs.map((job) => job.id), schedule);
+    expect(await prisma.publishJob.count({ where: { id: { in: jobs.map((job) => job.id) }, status: "APPROVED", scheduledFor: schedule } })).toBe(2);
+
+    await prisma.publishJob.update({ where: { id: jobs[1].id }, data: { status: "COMPLETED" } });
+    await prisma.publishJob.update({ where: { id: jobs[0].id }, data: { status: "READY_FOR_REVIEW" } });
+    await expect(repository.approveMany(jobs.map((job) => job.id), null)).rejects.toThrow("can no longer be approved");
+    expect((await prisma.publishJob.findUniqueOrThrow({ where: { id: jobs[0].id } })).status).toBe("READY_FOR_REVIEW");
+  });
+
   it("fences completion with the current claim token and keeps active heartbeats from going stale", async () => {
     await publishablePost("40006");
     const repository = new PublishRepository(prisma);
