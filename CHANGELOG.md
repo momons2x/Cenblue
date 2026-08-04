@@ -13,7 +13,8 @@ The project intends to follow semantic versioning once release automation is est
 - A guided `pnpm setup` workflow for local configuration, storage creation, migrations, media-tool detection, and optional Edge session setup.
 - Versioned `config:export` and `config:import` commands for portable preferences and managed source rules.
 - Expandable overflow-safe captions on Review and Overview, responsive Tailwind layouts, and semantic light/dark color tokens.
-- A cross-browser calendar scheduler using `APP_TIMEZONE`, 15-minute steps, and atomic bulk approval.
+- A compact cross-browser calendar scheduler using `APP_TIMEZONE`, customizable 24-hour time input, and atomic bulk approval.
+- Responsive Published cards with expandable captions, media details, performance metrics, and recovery actions.
 - An in-modal compression activity bar that locks conflicting Review controls while FFmpeg is running.
 
 ### Changed

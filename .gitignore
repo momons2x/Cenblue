@@ -20,5 +20,4 @@ playwright-report/
 test-results/
 .DS_Store
 Thumbs.db
-PRODUCTION_READINESS_PLAN.md
 cenblu-preferences*.json

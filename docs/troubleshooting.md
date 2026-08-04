@@ -10,7 +10,7 @@ Close all Edge processes for profile-in-use errors. Use repository-local clones 
 
 Inspect `lastError`, attempt count, retry time, and current status. Never force a `COMPLETED` publication. Verify X before resolving `MANUAL_ATTENTION`.
 
-If a schedule is rejected, confirm that Settings contains a valid IANA `APP_TIMEZONE` such as `Asia/Jakarta` and select a future 15-minute time. Daylight-saving gaps and ambiguous repeated times are rejected intentionally; choose another time. An approved job without a date is manual-only and will not be claimed by automatic workers, so publish it explicitly from Queue or assign a schedule.
+If a schedule is rejected, confirm that Settings contains a valid IANA `APP_TIMEZONE` such as `Asia/Jakarta` and enter a future 24-hour time from `00:00` through `23:59`. Daylight-saving gaps and ambiguous repeated times are rejected intentionally; choose another time. An approved job without a date is manual-only and will not be claimed by automatic workers, so publish it explicitly from Queue or assign a schedule.
 
 ## Database Failures
 

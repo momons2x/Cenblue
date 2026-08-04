@@ -179,7 +179,9 @@ Automatic scheduled publishing requires all of the following:
 
 The dashboard checks due jobs every 30 seconds. Future jobs remain untouched. Do not run the recurring dashboard publisher and `pnpm pipeline` as competing scheduler owners unless you understand the lease behavior.
 
-All schedule controls use the configured `APP_TIMEZONE`, a custom cross-browser calendar, and 15-minute time steps. Approval without a date is manual-only and requires the Queue's explicit **Publish now** action; automatic workers process only due jobs with a schedule.
+All schedule controls use the configured `APP_TIMEZONE`. A single compact trigger opens a cross-browser calendar with customizable 24-hour `HH:MM` input. Approval without a date is manual-only and requires the Queue's explicit **Publish now** action; automatic workers process only due jobs with a schedule.
+
+Published history uses responsive cards with expandable captions, media details, performance metrics, and recovery actions.
 
 ## Commands
 
@@ -260,7 +262,7 @@ Run `yt-dlp --version`, `ffmpeg -version`, and `ffprobe -version`, or configure 
 | `packages/operations` | Backup, audit, deletion, purge, and reset operations |
 | `packages/shared` | Logs, diagnostics, leases, and shared contracts |
 
-See [docs/architecture.md](docs/architecture.md) and [docs/operations.md](docs/operations.md).
+See [docs/architecture.md](docs/architecture.md), [docs/operations.md](docs/operations.md), and the tracked [production readiness and product roadmap](PRODUCTION_READINESS_PLAN.md).
 
 ## Security And Legal Responsibility
 

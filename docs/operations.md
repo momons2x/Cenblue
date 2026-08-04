@@ -33,7 +33,7 @@ Compression is a manual Review action and may run for several minutes. The modal
 
 ## Scheduling
 
-Set a valid IANA `APP_TIMEZONE` in Settings before relying on automatic publishing. The Review and Queue calendars use that timezone on every device and offer 15-minute steps. A blank Review schedule is manual-only; use **Publish now** from Queue when ready. Automatic dashboard and pipeline owners process only due jobs with a non-null schedule.
+Set a valid IANA `APP_TIMEZONE` in Settings before relying on automatic publishing. The compact Review and Queue scheduler opens a calendar with customizable 24-hour `HH:MM` input and uses that timezone on every device. A blank Review schedule is manual-only; use **Publish now** from Queue when ready. Automatic dashboard and pipeline owners process only due jobs with a non-null schedule.
 
 ## Restore Outline
 
