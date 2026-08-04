@@ -17,8 +17,10 @@ describe("timezone-safe scheduling", () => {
     expect(formatInTimeZone(scheduled!, "Asia/Jakarta")).toMatch(/0?9:15/);
   });
 
-  it("rejects non-15-minute values and nonexistent DST wall times", () => {
-    expect(() => scheduleFromFields(fields("2026-08-04", "09", "17"), "Asia/Jakarta", false)).toThrow("15-minute");
+  it("accepts custom minutes and rejects invalid or nonexistent wall times", () => {
+    expect(scheduleFromFields(fields("2026-08-04", "23", "47"), "Asia/Jakarta", false)?.toISOString()).toBe("2026-08-04T16:47:00.000Z");
+    expect(() => scheduleFromFields(fields("2026-08-04", "24", "00"), "Asia/Jakarta", false)).toThrow("24-hour");
+    expect(() => scheduleFromFields(fields("2026-08-04", "09", "60"), "Asia/Jakarta", false)).toThrow("24-hour");
     expect(() => scheduleFromFields(fields("2026-03-08", "02", "15"), "America/New_York", false)).toThrow("not valid");
     expect(() => scheduleFromFields(fields("2026-11-01", "01", "15"), "America/New_York", false)).toThrow("not valid");
   });
