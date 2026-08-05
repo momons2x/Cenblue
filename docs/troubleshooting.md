@@ -16,6 +16,8 @@ After profile deletion, the card must show **Deleted** and a success message. If
 
 Inspect `lastError`, attempt count, retry time, and current status. Never force a `COMPLETED` publication. Verify X before resolving `MANUAL_ATTENTION`.
 
+Check the amber warning rows first: a due job that auto-publishing cannot run is flagged with the exact blocking condition, such as Publish mode not being Automatic, an unassigned, paused, not-automatic, unverified, or deleted Publisher identity, or a retry that is not yet due.
+
 If a schedule is rejected, confirm that Settings contains a valid IANA `APP_TIMEZONE` such as `Asia/Jakarta` and enter a future 24-hour time from `00:00` through `23:59`. Daylight-saving gaps and ambiguous repeated times are rejected intentionally; choose another time. An approved job without a date is manual-only and will not be claimed by automatic workers, so publish it explicitly from Queue or assign a schedule.
 
 ## Database Failures

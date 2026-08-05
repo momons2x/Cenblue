@@ -180,7 +180,7 @@ Open <http://127.0.0.1:3000>. Dashboard scripts explicitly bind to loopback; thi
 6. Publish manually or assign a future schedule.
 7. Inspect account-specific output under **Published**.
 
-Review uses responsive compact cards for size, duration, and caption scanning. Long captions wrap safely and can expand in place. Open a card to preview the video, save caption drafts, schedule approval, or run optional balanced FFmpeg compression. Compression shows an in-modal activity bar, validates a new MP4, and replaces the active file only when the result is smaller.
+Review uses responsive compact cards for size, duration, and caption scanning. Long captions wrap safely and can expand in place. Open a card to save caption drafts, schedule approval, or run optional balanced FFmpeg compression. Video preview is hidden by default and can be shown per item or enabled by default through the **Preview behavior** setting under **Settings → Review**. Compression shows an in-modal activity bar, validates a new MP4, and replaces the active file only when the result is smaller.
 
 The **Compose** page publishes original text or one image through one or more explicitly selected Publisher identities without creating a video pipeline job.
 
@@ -189,15 +189,17 @@ The **Compose** page publishes original text or one image through one or more ex
 Automatic scheduled publishing requires all of the following:
 
 - Effective `PUBLISH_MODE=AUTOMATIC` in dashboard settings.
-- At least one enabled, automatic Publisher identity verified from the dashboard.
+- At least one enabled Publisher identity that is verified from the dashboard and enabled for automatic publishing.
 - An approved job with a non-null schedule at or before the current time.
 - The dashboard running continuously.
 - A closed, authenticated, account-matched, and available target Publisher profile.
 - Valid local media and caption data.
 
+New Publisher identities start with automatic publishing enabled, but remain inactive until they are verified from the dashboard. If a due job cannot auto-publish, the Queue shows an amber warning row naming the blocking condition, such as Publish mode not being Automatic, an unassigned, paused, not-automatic, unverified, or deleted Publisher identity, or a retry that is not yet due.
+
 The dashboard checks due jobs every 30 seconds. Future jobs remain untouched. Do not run the recurring dashboard publisher and `pnpm pipeline` as competing scheduler owners unless you understand the lease behavior.
 
-All schedule controls use the configured `APP_TIMEZONE`. A single compact trigger opens a cross-browser calendar with customizable 24-hour `HH:MM` input. Approval without a date is manual-only and requires the Queue's explicit **Publish now** action; automatic workers process only due jobs with a schedule.
+All schedule controls use the configured `APP_TIMEZONE` with native date and time inputs. Approval without a date is manual-only and requires the Queue's explicit **Publish now** action; automatic workers process only due jobs with a schedule.
 
 Published history uses responsive cards with expandable captions, media details, performance metrics, and recovery actions.
 
