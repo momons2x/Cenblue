@@ -46,7 +46,7 @@ export class SchedulerRepository {
     void intervalMinutes;
     return withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const assets = await transaction.mediaAsset.findMany({
-        where: { sourcePost: { publishJob: null, status: "DOWNLOADED" } },
+        where: { sourcePost: { publishJobs: { none: {} }, status: "DOWNLOADED" } },
         include: { sourcePost: { include: { sourceAccount: { select: { username: true, captionTemplate: true, attributionTemplate: true, hashtagRules: true } } } } },
         orderBy: { createdAt: "asc" },
       });
@@ -63,7 +63,7 @@ export class SchedulerRepository {
 
   async scheduleDownloadedAsset(sourcePostId: string, captionResolver?: ReviewCaptionResolver): Promise<boolean> {
     return withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
-      const asset = await transaction.mediaAsset.findFirst({ where: { sourcePostId, sourcePost: { publishJob: null, status: "DOWNLOADED" } }, include: { sourcePost: { include: { sourceAccount: { select: { username: true, captionTemplate: true, attributionTemplate: true, hashtagRules: true } } } } } });
+      const asset = await transaction.mediaAsset.findFirst({ where: { sourcePostId, sourcePost: { publishJobs: { none: {} }, status: "DOWNLOADED" } }, include: { sourcePost: { include: { sourceAccount: { select: { username: true, captionTemplate: true, attributionTemplate: true, hashtagRules: true } } } } } });
       if (!asset) return false;
       await transaction.publishJob.create({ data: { sourcePostId: asset.sourcePost.id, mediaAssetId: asset.id, caption: captionResolver?.(asset.sourcePost) ?? asset.sourcePost.text, status: "READY_FOR_REVIEW" } });
       await transaction.sourcePost.update({ where: { id: sourcePostId }, data: { status: "READY_FOR_REVIEW" } });

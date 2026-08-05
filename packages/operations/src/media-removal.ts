@@ -15,9 +15,10 @@ export class MediaRemovalService {
     const claimed = await this.client.$transaction(async (transaction) => {
       const post = await transaction.sourcePost.findUniqueOrThrow({
         where: { id: sourcePostId },
-        include: { mediaAsset: true, downloadJob: true, publishJob: { include: { publishedPost: true } } },
+        include: { mediaAsset: true, downloadJob: true, publishJobs: { include: { publishedPost: true } } },
       });
-      if (!post.publishJob?.publishedPost || post.publishJob.status !== "COMPLETED" || post.status !== "PUBLISHED") throw new Error("Only a confirmed published post can have its local media removed.");
+      if (!post.publishJobs.some((job) => job.publishedPost && job.status === "COMPLETED") || post.status !== "PUBLISHED") throw new Error("Only a confirmed published post can have its local media removed.");
+      if (post.publishJobs.some((job) => !["COMPLETED", "REJECTED", "CANCELLED"].includes(job.status))) throw new Error("Local media cannot be removed while another Publisher target is still pending.");
       if (!post.mediaAsset || post.mediaAsset.localRemovedAt) throw new Error("Local media has already been removed.");
       if (post.downloadJob?.status === "RUNNING") throw new Error("Media cannot be removed while work is running.");
       if (!inside(storage.videos, post.mediaAsset.filePath) || (post.mediaAsset.thumbnailPath && !inside(storage.thumbnails, post.mediaAsset.thumbnailPath))) throw new Error("Media path is outside configured storage.");
@@ -38,18 +39,18 @@ export class MediaRemovalService {
   }
 
   async remove(sourcePostId: string, storage: { videos: string; thumbnails: string }): Promise<void> {
-    const post = await this.client.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { mediaAsset: true, downloadJob: true, publishJob: { include: { publishedPost: true } } } });
+    const post = await this.client.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { mediaAsset: true, downloadJob: true, publishJobs: { include: { publishedPost: true } } } });
     if (!post.mediaAsset) throw new Error("No local media exists for this post.");
-    if (post.downloadJob?.status === "RUNNING" || ["RUNNING", "PUBLISHING"].includes(post.publishJob?.status ?? "") || post.status === "PUBLISHING") throw new Error("Media cannot be removed while work is running.");
+    if (post.downloadJob?.status === "RUNNING" || post.publishJobs.some((job) => ["RUNNING", "PUBLISHING"].includes(job.status)) || post.status === "PUBLISHING") throw new Error("Media cannot be removed while work is running.");
     const asset = post.mediaAsset;
     if (!inside(storage.videos, asset.filePath) || (asset.thumbnailPath && !inside(storage.thumbnails, asset.thumbnailPath))) throw new Error("Media path is outside configured storage.");
-    if (post.publishJob?.publishedPost) {
+    if (post.publishJobs.some((job) => job.publishedPost)) {
       return this.removePublished(sourcePostId, storage);
     }
     if (asset.thumbnailPath) await rm(asset.thumbnailPath, { force: true });
     await rm(asset.filePath, { force: true });
     await this.client.$transaction([
-      ...(post.publishJob ? [this.client.publishJob.delete({ where: { id: post.publishJob.id } })] : []),
+      this.client.publishJob.deleteMany({ where: { sourcePostId } }),
       this.client.mediaAsset.delete({ where: { id: asset.id } }),
       this.client.downloadJob.update({ where: { sourcePostId }, data: { status: "CANCELLED", nextAttemptAt: null, completedAt: null } }),
       this.client.sourcePost.update({ where: { id: sourcePostId }, data: { status: "SKIPPED" } }),

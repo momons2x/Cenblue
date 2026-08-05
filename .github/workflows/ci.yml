@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CENBLU_ROOT: ${{ github.workspace }}
+  DATABASE_URL: file:../../../storage/cenblu-ci.db
+  PLAYWRIGHT_HEADLESS: "true"
+  PUBLISH_MODE: ASSISTED
+
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: mkdir -p storage/videos storage/thumbnails storage/temp storage/logs storage/backups
+      - run: pnpm db:migrate
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm pipeline:smoke
+      - run: pnpm build
+
+  windows-routes:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - shell: pwsh
+        run: New-Item -ItemType Directory -Force storage, storage/temp, storage/videos, storage/thumbnails, storage/logs, storage/backups
+      - run: pnpm dashboard:routes:smoke

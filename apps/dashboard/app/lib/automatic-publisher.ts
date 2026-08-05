@@ -1,7 +1,9 @@
 import pino from "pino";
+import { resolve } from "node:path";
 import { applyStoredSettings, loadConfig } from "@cenblu/config";
-import { DatabaseExclusiveLease, prisma, PublishRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
+import { DatabaseExclusiveLease, identityFingerprint, identityLeaseName, prisma, PublishRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
 import { LocalPublishMediaVerifier, PublishService, XPlaywrightPublisher } from "@cenblu/publisher";
+import { combineExclusiveLeases } from "@cenblu/shared/lease";
 
 const cadenceMs = 30_000;
 
@@ -23,23 +25,23 @@ export function startAutomaticPublisher(): void {
       const settings = new SettingsRepository(prisma);
       const storedSettings = await settings.getAll();
       const config = applyStoredSettings(loadConfig(), storedSettings);
-      if (!automaticPublishingEnabled(config.publishMode, storedSettings.PUBLISHER_BROWSER_SESSION_VERIFIED_AT)) return;
+      if (config.publishMode !== "AUTOMATIC") return;
       const repository = new PublishRepository(prisma);
-      const dueJobIds = await repository.findDueScheduledIds(new Date());
-      if (dueJobIds.length === 0) return;
-      const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "x-publisher-profile", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-      const service = new PublishService(
-        repository,
-        new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: config.publisherProfilePath, browserChannel: config.playwrightBrowserChannel, browserProfileDirectory: config.publisherProfileDirectory, allowExternalProfile: config.playwrightAllowExternalProfile, lease: browserLease, diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000 }, logger),
-        new LocalPublishMediaVerifier(config.videoStoragePath),
-        logger,
-        config.publishAllowEmptyCaption,
-      );
-      for (const jobId of dueJobIds) {
-        try {
-          await service.processJob(jobId);
-        } catch (error) {
-          logger.warn({ operation: "automatic-publisher.job.skipped", jobId, error: error instanceof Error ? error.message : String(error) }, "Scheduled publish job could not be processed");
+      const identities = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true, automaticEnabled: true, verifiedAt: { not: null } }, orderBy: { createdAt: "asc" } });
+      for (const identity of identities) {
+        if (!identity.expectedUsername || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) continue;
+        const dueJobIds = await repository.findDueScheduledIds(new Date(), 10, identity.id);
+        if (dueJobIds.length === 0) continue;
+        const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+        const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+        const service = new PublishService(
+          repository,
+          new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, browserLease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername }, logger),
+          new LocalPublishMediaVerifier(config.videoStoragePath), logger, config.publishAllowEmptyCaption, 3, identity.id,
+        );
+        for (const jobId of dueJobIds) {
+          try { await service.processJob(jobId); }
+          catch (error) { logger.warn({ operation: "automatic-publisher.job.skipped", jobId, publisherIdentityId: identity.id, error: error instanceof Error ? error.message : String(error) }, "Scheduled publish job could not be processed"); }
         }
       }
     } catch (error) {

@@ -27,12 +27,12 @@ export class SourcePurgeService {
     const source = await this.client.sourceAccount.findUnique({
       where: { id: sourceId },
       include: {
-        posts: { include: { mediaAsset: true, downloadJob: true, publishJob: true } },
+        posts: { include: { mediaAsset: true, downloadJob: true, publishJobs: true } },
       },
     });
     if (!source) throw new Error("Source no longer exists");
     if (confirmedUsername.trim().toLowerCase().replace(/^@/, "") !== source.username) throw new Error("Username confirmation does not match the source");
-    const active = source.posts.some((post) => post.downloadJob?.status === "RUNNING" || post.publishJob?.status === "RUNNING");
+    const active = source.posts.some((post) => post.downloadJob?.status === "RUNNING" || post.publishJobs.some((job) => job.status === "RUNNING"));
     if (active) throw new Error("Source cannot be purged while related jobs are running");
 
     const files = source.posts.flatMap((post) => {

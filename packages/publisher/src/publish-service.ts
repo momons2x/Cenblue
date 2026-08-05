@@ -12,11 +12,12 @@ export class PublishService {
     private readonly logger: Logger,
     private readonly allowEmptyCaption: boolean,
     private readonly maxAttempts = 3,
+    private readonly publisherIdentityId?: string,
   ) {}
 
   async processNext(): Promise<boolean> {
     const now = new Date();
-    const job = await this.repository.claimNext(now, new Date(now.getTime() - 15 * 60_000));
+    const job = await this.repository.claimNext(now, new Date(now.getTime() - 15 * 60_000), this.publisherIdentityId);
     if (!job) return false;
     await this.processClaimed(job);
     return true;
@@ -24,7 +25,7 @@ export class PublishService {
 
   async processJob(jobId: string): Promise<boolean> {
     const now = new Date();
-    const job = await this.repository.claimById(jobId, now, new Date(now.getTime() - 15 * 60_000));
+    const job = await this.repository.claimById(jobId, now, new Date(now.getTime() - 15 * 60_000), this.publisherIdentityId);
     if (!job) return false;
     await this.processClaimed(job);
     return true;

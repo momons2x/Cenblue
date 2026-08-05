@@ -21,7 +21,7 @@
 - Windows 10 or 11 for the supported Edge profile setup workflow.
 - Node.js 22.12 or newer.
 - pnpm 10.12.1 through Corepack.
-- Microsoft Edge, or Chrome with `PLAYWRIGHT_BROWSER_CHANNEL=chrome`.
+- A Chromium-based browser such as Microsoft Edge, Chrome, Brave, Chromium, Vivaldi, or Opera.
 - `yt-dlp`, `ffmpeg`, and `ffprobe` on `PATH`, or their paths configured in `.env`.
 - Enough disk space for the SQLite database, browser profiles, videos, thumbnails, logs, and backups.
 - X accounts you are authorized to access and content you have the right to download and publish.
@@ -68,9 +68,9 @@ The complete `storage/` tree is ignored by Git except its placeholder. Never for
 | --- | --- |
 | `CENBLU_ROOT` | Absolute repository path |
 | `DATABASE_URL` | Prisma SQLite URL |
-| `PLAYWRIGHT_PROFILE_PATH` | Collector Edge user-data root |
+| `PLAYWRIGHT_PROFILE_PATH` | Legacy/fallback collector browser user-data root |
 | `PLAYWRIGHT_PROFILE_DIRECTORY` | Collector internal profile, such as `Profile 1` |
-| `PUBLISHER_PROFILE_PATH` | Separate publisher Edge user-data root |
+| `PUBLISHER_PROFILE_PATH` | Legacy/fallback publisher browser user-data root |
 | `PUBLISHER_PROFILE_DIRECTORY` | Optional publisher internal profile |
 | `PUBLISH_MODE` | `ASSISTED` or `AUTOMATIC` |
 | `DOWNLOAD_CONCURRENCY` | Parallel download workers, from 1 to 3 |
@@ -78,7 +78,7 @@ The complete `storage/` tree is ignored by Git except its placeholder. Never for
 | `VIDEO_STORAGE_PATH` | Final media directory |
 | `BACKUP_STORAGE_PATH` | SQLite snapshot directory |
 
-Dashboard settings override corresponding `.env` values. Restart the dashboard after changing `.env`, especially browser profile paths.
+Dashboard settings override corresponding `.env` values. Browser choices made in the dashboard are device-local, use generated profiles under `storage/browser-profiles/`, and are excluded from portable exports.
 
 ### Portable Preferences
 
@@ -93,9 +93,26 @@ The versioned manifest excludes videos, thumbnails, operational history, browser
 
 ## Browser Profiles
 
-Collector and publisher profiles must be separate. Close every Edge window and background process before opening, cloning, checking, or using a Cenblue profile.
+Every Collector and Publisher identity uses a separate managed profile. Cenblue can detect common Chromium-based browsers on Windows, run up to two Collector identities together from dashboard collection actions, and serialize Publisher uploads through independently owned jobs.
 
-### Collector
+### Dashboard Setup
+
+After starting Cenblue, open **Settings → Isolated X identities**:
+
+1. Add a Collector or Publisher with a label, expected X username, and detected/custom browser.
+2. Select **Create and log in**, then complete X login in the isolated browser window.
+3. Close that browser window completely.
+4. Select **Verify identity**. The active X username must exactly match the configured identity.
+
+Verification records the authenticated X account and is bound to the exact executable and managed profile. Changing browsers, opening login setup, resetting a profile, or importing portable preferences invalidates the previous verification. Automatic publishing remains disabled until the current publisher binding is verified.
+
+The managed profiles contain sensitive cookies and remain under `storage/browser-profiles/<role>/<identity-id>`. Cenblue never automates the browser's everyday user-data directory. Sources are assigned to one Collector, bookmark scans explicitly select a Collector, and Review can create independent jobs for several Publisher identities.
+
+Deleting one local profile preserves its identity, assignments, jobs, and history. **Clear all managed browser profiles** removes all managed cookies and login files after the typed `DELETE ALL PROFILES` confirmation while preserving identity records and operational data.
+
+The CLI workflows below remain available for legacy profiles and recovery.
+
+### Legacy Collector
 
 Configure a repository-local profile:
 
@@ -111,7 +128,7 @@ pnpm collector:profile:open
 pnpm collector:session-check
 ```
 
-### Fresh Publisher
+### Legacy Fresh Publisher
 
 Use a different directory and leave `PUBLISHER_PROFILE_DIRECTORY` unset:
 
@@ -127,7 +144,7 @@ pnpm publisher:session-check
 
 Complete login in the visible browser and follow the terminal prompt. The session check records the verification required by automatic publishing.
 
-### Clone An Existing Edge Profile
+### Legacy Edge Profile Clone
 
 Never point Playwright directly at Edge's default `User Data` directory. Edge rejects remote debugging there. Instead, clone one internal profile into an unused repository-local destination:
 
@@ -155,26 +172,27 @@ pnpm dev
 
 Open <http://127.0.0.1:3000>. Dashboard scripts explicitly bind to loopback; this is a safety boundary, not a substitute for authentication. A normal workflow is:
 
-1. Add accounts under **Sources**.
-2. Collect posts and process downloads from **Queue**.
-3. Inspect downloaded media under **Downloads** or **Videos**.
-4. Edit captions and approve posts under **Review**.
-5. Publish manually or assign a future schedule.
-6. Inspect successful output under **Published**.
+1. Add and verify browser identities under **Settings**.
+2. Add accounts under **Sources** and assign each one to a Collector.
+3. Collect posts and process downloads from **Queue**.
+4. Inspect downloaded media under **Downloads** or **Videos**.
+5. Edit captions, select one or more Publishers, and approve posts under **Review**.
+6. Publish manually or assign a future schedule.
+7. Inspect account-specific output under **Published**.
 
 Review uses responsive compact cards for size, duration, and caption scanning. Long captions wrap safely and can expand in place. Open a card to preview the video, save caption drafts, schedule approval, or run optional balanced FFmpeg compression. Compression shows an in-modal activity bar, validates a new MP4, and replaces the active file only when the result is smaller.
 
-The **Compose** page publishes original text or one image through the publisher profile without creating a video pipeline job.
+The **Compose** page publishes original text or one image through one or more explicitly selected Publisher identities without creating a video pipeline job.
 
 ## Scheduled Publishing
 
 Automatic scheduled publishing requires all of the following:
 
 - Effective `PUBLISH_MODE=AUTOMATIC` in dashboard settings.
-- A successful `pnpm publisher:session-check`.
+- At least one enabled, automatic Publisher identity verified from the dashboard.
 - An approved job with a non-null schedule at or before the current time.
 - The dashboard running continuously.
-- A closed, authenticated, and available publisher profile.
+- A closed, authenticated, account-matched, and available target Publisher profile.
 - Valid local media and caption data.
 
 The dashboard checks due jobs every 30 seconds. Future jobs remain untouched. Do not run the recurring dashboard publisher and `pnpm pipeline` as competing scheduler owners unless you understand the lease behavior.
@@ -225,7 +243,7 @@ Tests use separate databases under `storage/temp`; never point test commands at 
 
 ### Profile In Use
 
-Close all Edge windows and background processes. Collector and publisher user-data roots must be distinct.
+Close the Cenblue-managed browser window for that role. Collector and publisher user-data roots must be distinct.
 
 ### DevTools Requires A Non-Default Directory
 

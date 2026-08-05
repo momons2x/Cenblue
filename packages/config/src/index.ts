@@ -11,6 +11,14 @@ export const storedConfigKeys = [
   "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "CAPTION_TEMPLATES", "APP_TIMEZONE",
 ] as const;
 
+export const browserIds = ["msedge", "chrome", "brave", "chromium", "vivaldi", "opera", "custom"] as const;
+export type BrowserId = typeof browserIds[number];
+
+export const deviceBrowserSettingKeys = [
+  "DEVICE_COLLECTOR_BROWSER_ID", "DEVICE_COLLECTOR_BROWSER_EXECUTABLE",
+  "DEVICE_PUBLISHER_BROWSER_ID", "DEVICE_PUBLISHER_BROWSER_EXECUTABLE",
+] as const;
+
 const environmentSchema = z.object({
   CENBLU_ROOT: z.string().min(1),
   DATABASE_URL: z.string().min(1),
@@ -22,6 +30,10 @@ const environmentSchema = z.object({
   PUBLISHER_PROFILE_PATH: z.string().min(1).default("./storage/browser-profile-publisher"),
   PUBLISHER_PROFILE_DIRECTORY: z.string().regex(/^(Default|Profile \d+)$/).optional(),
   PLAYWRIGHT_BROWSER_CHANNEL: z.enum(["msedge", "chrome"]).default("msedge"),
+  COLLECTOR_BROWSER_ID: z.enum(browserIds).optional(),
+  COLLECTOR_BROWSER_EXECUTABLE: z.string().min(1).optional(),
+  PUBLISHER_BROWSER_ID: z.enum(browserIds).optional(),
+  PUBLISHER_BROWSER_EXECUTABLE: z.string().min(1).optional(),
   PLAYWRIGHT_ALLOW_EXTERNAL_PROFILE: booleanFromEnvironment.default(false),
   SOURCE_ACCOUNT_LIMIT: z.coerce.number().int().min(1).max(100).default(3),
   POSTS_PER_SOURCE: z.coerce.number().int().min(1).default(5),
@@ -63,6 +75,10 @@ export type AppConfig = {
   publisherProfilePath: string;
   publisherProfileDirectory: string | undefined;
   playwrightBrowserChannel: "msedge" | "chrome";
+  collectorBrowserId: BrowserId;
+  collectorBrowserExecutablePath: string | undefined;
+  publisherBrowserId: BrowserId;
+  publisherBrowserExecutablePath: string | undefined;
   playwrightAllowExternalProfile: boolean;
   sourceAccountLimit: number;
   postsPerSource: number;
@@ -93,6 +109,12 @@ export type AppConfig = {
   backupStoragePath: string;
 };
 
+export function browserBindingFingerprint(config: AppConfig, role: "collector" | "publisher"): string {
+  return JSON.stringify(role === "collector"
+    ? { id: config.collectorBrowserId, executablePath: config.collectorBrowserExecutablePath ?? null, profilePath: config.playwrightProfilePath, profileDirectory: config.playwrightProfileDirectory ?? null }
+    : { id: config.publisherBrowserId, executablePath: config.publisherBrowserExecutablePath ?? null, profilePath: config.publisherProfilePath, profileDirectory: config.publisherProfileDirectory ?? null });
+}
+
 function localPath(root: string, value: string, name: string): string {
   const path = resolve(root, value);
   const fromRoot = relative(root, path);
@@ -122,6 +144,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     publisherProfilePath,
     publisherProfileDirectory: parsed.PUBLISHER_PROFILE_DIRECTORY,
     playwrightBrowserChannel: parsed.PLAYWRIGHT_BROWSER_CHANNEL,
+    collectorBrowserId: parsed.COLLECTOR_BROWSER_ID ?? parsed.PLAYWRIGHT_BROWSER_CHANNEL,
+    collectorBrowserExecutablePath: parsed.COLLECTOR_BROWSER_EXECUTABLE ? resolve(parsed.COLLECTOR_BROWSER_EXECUTABLE) : undefined,
+    publisherBrowserId: parsed.PUBLISHER_BROWSER_ID ?? parsed.PLAYWRIGHT_BROWSER_CHANNEL,
+    publisherBrowserExecutablePath: parsed.PUBLISHER_BROWSER_EXECUTABLE ? resolve(parsed.PUBLISHER_BROWSER_EXECUTABLE) : undefined,
     playwrightAllowExternalProfile: parsed.PLAYWRIGHT_ALLOW_EXTERNAL_PROFILE,
     sourceAccountLimit: parsed.SOURCE_ACCOUNT_LIMIT,
     postsPerSource: parsed.POSTS_PER_SOURCE,
@@ -155,6 +181,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
 
 export function applyStoredSettings(config: AppConfig, settings: Record<string, string>): AppConfig {
   const allowedSettings = Object.fromEntries(storedConfigKeys.flatMap((key) => settings[key] === undefined ? [] : [[key, settings[key]]]));
+  const collectorBrowserId = settings.DEVICE_COLLECTOR_BROWSER_ID;
+  const publisherBrowserId = settings.DEVICE_PUBLISHER_BROWSER_ID;
   const environment: NodeJS.ProcessEnv = {
     ...process.env,
     CENBLU_ROOT: config.repositoryRoot,
@@ -166,6 +194,10 @@ export function applyStoredSettings(config: AppConfig, settings: Record<string, 
     PUBLISHER_PROFILE_PATH: config.publisherProfilePath,
     PUBLISHER_PROFILE_DIRECTORY: config.publisherProfileDirectory,
     PLAYWRIGHT_BROWSER_CHANNEL: config.playwrightBrowserChannel,
+    COLLECTOR_BROWSER_ID: collectorBrowserId ?? config.collectorBrowserId,
+    COLLECTOR_BROWSER_EXECUTABLE: settings.DEVICE_COLLECTOR_BROWSER_EXECUTABLE ?? config.collectorBrowserExecutablePath,
+    PUBLISHER_BROWSER_ID: publisherBrowserId ?? config.publisherBrowserId,
+    PUBLISHER_BROWSER_EXECUTABLE: settings.DEVICE_PUBLISHER_BROWSER_EXECUTABLE ?? config.publisherBrowserExecutablePath,
     PLAYWRIGHT_ALLOW_EXTERNAL_PROFILE: String(config.playwrightAllowExternalProfile),
     LOG_STORAGE_PATH: config.logStoragePath,
     VIDEO_STORAGE_PATH: config.videoStoragePath,
@@ -177,5 +209,13 @@ export function applyStoredSettings(config: AppConfig, settings: Record<string, 
     FFPROBE_BINARY: config.ffprobeBinary,
     ...allowedSettings,
   };
+  if (collectorBrowserId) {
+    environment.PLAYWRIGHT_PROFILE_PATH = resolve(config.repositoryRoot, "storage", "browser-profiles", "collector", collectorBrowserId);
+    delete environment.PLAYWRIGHT_PROFILE_DIRECTORY;
+  }
+  if (publisherBrowserId) {
+    environment.PUBLISHER_PROFILE_PATH = resolve(config.repositoryRoot, "storage", "browser-profiles", "publisher", publisherBrowserId);
+    delete environment.PUBLISHER_PROFILE_DIRECTORY;
+  }
   return loadConfig(environment);
 }

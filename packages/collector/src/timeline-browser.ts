@@ -2,9 +2,11 @@ import { mkdir, stat } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import type { Logger } from "pino";
+import type { BrowserId } from "@cenblu/config";
 import type { CollectionOptions, SourceAccountInput } from "@cenblu/shared";
 import { pruneDiagnosticFiles } from "@cenblu/shared/diagnostics";
 import type { ExclusiveLease } from "@cenblu/shared/lease";
+import { detectXUsername } from "@cenblu/shared/x-identity";
 import type { RawTimelinePost } from "./normalize";
 import { normalizeBookmarkedPost, normalizeTimelinePost } from "./normalize";
 import { parsePostMetricLabels, type PostMetrics } from "./post-metrics";
@@ -18,7 +20,9 @@ export interface TimelineBrowser {
 
 export type PlaywrightTimelineBrowserOptions = {
   headless: boolean;
-  browserChannel: "msedge" | "chrome";
+  browserId?: BrowserId;
+  browserChannel?: "msedge" | "chrome";
+  browserExecutablePath?: string;
   repositoryRoot: string;
   profileDirectory: string;
   browserProfileDirectory?: string;
@@ -32,13 +36,16 @@ export type PlaywrightTimelineBrowserOptions = {
   scrollDelayMs?: number;
   maxSourceDurationMs?: number;
   profileRole?: "collector" | "publisher";
+  expectedUsername?: string;
 };
 
 export function collectorBrowserLaunchOptions(options: PlaywrightTimelineBrowserOptions) {
+  const browserId = options.browserId ?? options.browserChannel ?? "msedge";
+  if (!options.browserExecutablePath && !["msedge", "chrome", "chromium"].includes(browserId)) throw new Error(`${browserId} requires a configured browser executable`);
   return {
     headless: options.headless,
     timeout: options.operationTimeoutMs ?? 20_000,
-    channel: options.browserChannel,
+    ...(options.browserExecutablePath ? { executablePath: options.browserExecutablePath } : { channel: browserId }),
     args: options.browserProfileDirectory ? [`--profile-directory=${options.browserProfileDirectory}`] : undefined,
   };
 }
@@ -75,7 +82,7 @@ async function extractPosts(page: Page): Promise<RawTimelinePost[]> {
     const socialContext = article.querySelector(selectors.socialContext)?.textContent ?? "";
     const articleText = article.textContent ?? "";
 
-    return {
+  return {
       statusHref,
       text: article.querySelector(selectors.tweetText)?.textContent ?? "",
       datetime: timestamp?.getAttribute("datetime") ?? null,
@@ -119,13 +126,14 @@ export class PlaywrightTimelineBrowser implements TimelineBrowser {
       await stat(resolve(this.profileDirectory, "Local State")).catch(() => { throw new Error(`${label} browser Local State is missing from ${this.profileDirectory}`); });
       await stat(resolve(this.profileDirectory, this.options.browserProfileDirectory)).catch(() => { throw new Error(`${label} browser profile ${this.options.browserProfileDirectory} is missing from ${this.profileDirectory}`); });
     } else if (!this.options.allowExternalProfile) await mkdir(this.profileDirectory, { recursive: true });
-    this.logger.info({ operation: `${this.profileRole}.browser.launch.start`, browserChannel: this.options.browserChannel, profileDirectory: this.profileDirectory, browserProfileDirectory: this.options.browserProfileDirectory ?? null }, `Launching authenticated ${this.profileRole} browser profile`);
+    const browserId = this.options.browserId ?? this.options.browserChannel ?? "msedge";
+    this.logger.info({ operation: `${this.profileRole}.browser.launch.start`, browserId, profileDirectory: this.profileDirectory, browserProfileDirectory: this.options.browserProfileDirectory ?? null }, `Launching authenticated ${this.profileRole} browser profile`);
     const context = await chromium.launchPersistentContext(this.profileDirectory, collectorBrowserLaunchOptions(this.options));
-    this.logger.info({ operation: `${this.profileRole}.browser.launch.complete`, browserChannel: this.options.browserChannel }, `Authenticated ${this.profileRole} browser profile launched`);
+    this.logger.info({ operation: `${this.profileRole}.browser.launch.complete`, browserId }, `Authenticated ${this.profileRole} browser profile launched`);
     return context;
   }
 
-  private async assertLoggedIn(page: Page): Promise<void> {
+  private async assertLoggedIn(page: Page, navigateToProfile = false): Promise<string | null> {
     await page.goto("https://x.com/home", { waitUntil: "domcontentloaded", timeout: this.operationTimeoutMs });
     const accountMenu = page.locator(xSelectors.accountMenuButton).first();
     await Promise.race([
@@ -136,15 +144,22 @@ export class PlaywrightTimelineBrowser implements TimelineBrowser {
     const label = this.profileRole === "collector" ? "Collector" : "Publisher";
     if (await intervention.isVisible().catch(() => false)) throw new Error(`${label} X account requires manual intervention`);
     if (!await accountMenu.isVisible().catch(() => false)) throw new Error(`${label} browser profile is not logged in to X`);
+    const activeUsername = await detectXUsername(page, xSelectors.accountMenuButton, navigateToProfile);
+    if (this.options.expectedUsername) {
+      if (!activeUsername || activeUsername !== this.options.expectedUsername.toLowerCase()) throw new Error(`${label} identity mismatch. Expected @${this.options.expectedUsername}.`);
+    }
+    return activeUsername;
   }
 
-  async checkSession(): Promise<void> {
-    await this.options.lease.run(async () => {
+  async checkSession(): Promise<string | null> {
+    return this.options.lease.run(async () => {
       const context = await this.context();
       const page = context.pages()[0] ?? await context.newPage();
       try {
-        await this.assertLoggedIn(page);
-        this.logger.info({ operation: `${this.profileRole}.session.check`, browserChannel: this.options.browserChannel, browserProfileDirectory: this.options.browserProfileDirectory ?? null }, `${this.profileRole === "collector" ? "Collector" : "Publisher"} session is authenticated`);
+        const activeUsername = await this.assertLoggedIn(page, true);
+        const account = activeUsername ? `@${activeUsername}` : null;
+        this.logger.info({ operation: `${this.profileRole}.session.check`, browserId: this.options.browserId ?? this.options.browserChannel, browserProfileDirectory: this.options.browserProfileDirectory ?? null, account }, `${this.profileRole === "collector" ? "Collector" : "Publisher"} session is authenticated`);
+        return account;
       } finally { await context.close().catch(() => undefined); }
     });
   }

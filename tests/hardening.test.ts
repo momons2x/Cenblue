@@ -1,7 +1,7 @@
 import { readdir, readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyStoredSettings, loadConfig } from "@cenblu/config";
+import { applyStoredSettings, browserBindingFingerprint, loadConfig } from "@cenblu/config";
 import { withDatabaseRetry } from "@cenblu/database";
 import { createLogger } from "@cenblu/shared/logger";
 
@@ -44,6 +44,26 @@ describe("hardening", () => {
     expect(config.publisherProfilePath).toBe(resolve(root, "storage/browser-profile-publisher"));
     expect(config.publisherProfilePath).not.toBe(config.playwrightProfilePath);
     expect(() => loadConfig({ CENBLU_ROOT: root, DATABASE_URL: "file:test.db", PLAYWRIGHT_PROFILE_PATH: "./storage/same-profile", PUBLISHER_PROFILE_PATH: "./storage/same-profile" })).toThrow("must use different directories");
+  });
+
+  it("applies independent device browser bindings to managed profiles", () => {
+    const base = loadConfig({ CENBLU_ROOT: root, DATABASE_URL: "file:test.db" });
+    const config = applyStoredSettings(base, {
+      DEVICE_COLLECTOR_BROWSER_ID: "brave",
+      DEVICE_COLLECTOR_BROWSER_EXECUTABLE: "C:/Browsers/Brave/brave.exe",
+      DEVICE_PUBLISHER_BROWSER_ID: "chrome",
+      DEVICE_PUBLISHER_BROWSER_EXECUTABLE: "C:/Browsers/Chrome/chrome.exe",
+    });
+    expect(config).toMatchObject({ collectorBrowserId: "brave", publisherBrowserId: "chrome" });
+    expect(config.playwrightProfilePath).toBe(resolve(root, "storage/browser-profiles/collector/brave"));
+    expect(config.publisherProfilePath).toBe(resolve(root, "storage/browser-profiles/publisher/chrome"));
+    expect(browserBindingFingerprint(config, "collector")).toContain("brave.exe");
+    expect(browserBindingFingerprint(config, "publisher")).not.toBe(browserBindingFingerprint(config, "collector"));
+  });
+
+  it("rejects unknown device browser identifiers", () => {
+    const config = loadConfig({ CENBLU_ROOT: root, DATABASE_URL: "file:test.db" });
+    expect(() => applyStoredSettings(config, { DEVICE_COLLECTOR_BROWSER_ID: "firefox" })).toThrow();
   });
 
   it("applies repository path protection to the publisher profile", () => {

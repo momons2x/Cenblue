@@ -24,6 +24,7 @@ describe("portable preferences", () => {
     await prisma.appSetting.createMany({ data: [
       { key: "CAPTION_TEMPLATES", value: "{sourceCaption}\n\nShared" },
       { key: "PUBLISHER_BROWSER_SESSION_VERIFIED_AT", value: new Date().toISOString() },
+      { key: "DEVICE_PUBLISHER_BROWSER_EXECUTABLE", value: "C:/private/browser.exe" },
       { key: "VIDEO_STORAGE_PATH", value: "C:/private/videos" },
     ] });
     await new SourceAccountRepository(prisma).create({ username: "portable", collectLimit: 9, captionTemplate: "Caption", hashtagRules: "#tag" });
@@ -34,9 +35,13 @@ describe("portable preferences", () => {
 
     await prisma.appSetting.deleteMany();
     await prisma.sourceAccount.deleteMany();
-    await prisma.appSetting.create({ data: { key: "COLLECTOR_BROWSER_SESSION_VERIFIED_AT", value: new Date().toISOString() } });
+    await prisma.appSetting.createMany({ data: [
+      { key: "COLLECTOR_BROWSER_SESSION_VERIFIED_AT", value: new Date().toISOString() },
+      { key: "COLLECTOR_BROWSER_SESSION_BINDING", value: "private-device-binding" },
+    ] });
     expect(await service.import(exported)).toEqual({ settings: 1, sources: 1 });
     expect(await prisma.appSetting.findUnique({ where: { key: "COLLECTOR_BROWSER_SESSION_VERIFIED_AT" } })).toBeNull();
+    expect(await prisma.appSetting.findUnique({ where: { key: "COLLECTOR_BROWSER_SESSION_BINDING" } })).toBeNull();
     expect(await prisma.sourceAccount.findUniqueOrThrow({ where: { username: "portable" } })).toMatchObject({ managedSource: true, enabled: true, collectLimit: 9 });
   });
 

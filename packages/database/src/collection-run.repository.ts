@@ -4,8 +4,8 @@ import type { CollectionScanProgress } from "@cenblu/shared";
 export class CollectionRunRepository {
   constructor(private readonly client: PrismaClient) {}
 
-  start(sources: { id: string; targetNew: number }[]): Promise<CollectionRun> {
-    return this.client.collectionRun.create({ data: { totalSources: sources.length, targetNew: sources.reduce((total, source) => total + source.targetNew, 0), sources: { create: sources.map((source) => ({ sourceAccountId: source.id, targetNew: source.targetNew })) } } });
+  start(sources: { id: string; targetNew: number }[], collectorIdentityId?: string): Promise<CollectionRun> {
+    return this.client.collectionRun.create({ data: { collectorIdentityId, totalSources: sources.length, targetNew: sources.reduce((total, source) => total + source.targetNew, 0), sources: { create: sources.map((source) => ({ sourceAccountId: source.id, targetNew: source.targetNew })) } } });
   }
 
   setCurrent(id: string, username: string): Promise<CollectionRun> {

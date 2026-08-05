@@ -3,15 +3,19 @@ import { relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
 import type { Logger } from "pino";
+import type { BrowserId } from "@cenblu/config";
 import { pruneDiagnosticFiles } from "@cenblu/shared/diagnostics";
 import type { ExclusiveLease } from "@cenblu/shared/lease";
+import { detectXUsername } from "@cenblu/shared/x-identity";
 import { xPublisherSelectors } from "./selectors";
 import { PublisherError, type Publisher, type PublishInput, type PublishResult } from "./types";
 
 export type PlaywrightPublisherOptions = {
   repositoryRoot?: string;
   profileDirectory: string;
-  browserChannel: "msedge" | "chrome";
+  browserId?: BrowserId;
+  browserChannel?: "msedge" | "chrome";
+  browserExecutablePath?: string;
   browserProfileDirectory?: string;
   allowExternalProfile?: boolean;
   lease: ExclusiveLease;
@@ -21,6 +25,7 @@ export type PlaywrightPublisherOptions = {
   minUploadMbps?: number;
   maxUploadTimeoutMs?: number;
   uploadTimeoutMs?: number;
+  expectedUsername?: string;
 };
 
 const minimumUploadTimeoutMs = 5 * 60_000;
@@ -39,18 +44,20 @@ function configuredPath(path: string, label: string, allowExternal = false, repo
 }
 
 export function persistentContextOptions(options: PlaywrightPublisherOptions, headless = options.headless) {
+  const browserId = options.browserId ?? options.browserChannel ?? "msedge";
+  if (!options.browserExecutablePath && !["msedge", "chrome", "chromium"].includes(browserId)) throw new Error(`${browserId} requires a configured browser executable`);
   return {
     headless,
     timeout: options.operationTimeoutMs ?? 20_000,
-    channel: options.browserChannel,
+    ...(options.browserExecutablePath ? { executablePath: options.browserExecutablePath } : { channel: browserId }),
     args: options.browserProfileDirectory ? [`--profile-directory=${options.browserProfileDirectory}`] : undefined,
   };
 }
 
-export function classifyBrowserLaunchError(error: unknown): PublisherError {
+export function classifyBrowserLaunchError(error: unknown, browserName = "Browser"): PublisherError {
   const message = error instanceof Error ? error.message : String(error);
   if (/profile.*in use|user data directory is already in use|processsingleton|opening in existing browser session|cannot create a process singleton/i.test(message)) {
-    return new PublisherError("PROFILE_IN_USE", "Edge profile is in use. Close every Edge window and background process, then retry.", false, true, { cause: error });
+    return new PublisherError("PROFILE_IN_USE", `${browserName} profile is in use. Close its Cenblue profile window, then retry.`, false, true, { cause: error });
   }
   return new PublisherError("BROWSER_LAUNCH_FAILED", `Could not launch the configured browser profile: ${message}`, false, true, { cause: error });
 }
@@ -112,16 +119,17 @@ export class XPlaywrightPublisher implements Publisher {
       await stat(resolve(this.profileDirectory, "Local State")).catch(() => { throw new PublisherError("BROWSER_LAUNCH_FAILED", `Publisher browser Local State is missing from ${this.profileDirectory}`, false, true); });
       await stat(resolve(this.profileDirectory, this.options.browserProfileDirectory)).catch(() => { throw new PublisherError("BROWSER_LAUNCH_FAILED", `Publisher browser profile ${this.options.browserProfileDirectory} is missing from ${this.profileDirectory}`, false, true); });
     } else if (!this.options.allowExternalProfile) await mkdir(this.profileDirectory, { recursive: true });
-    this.logger.info({ operation: "publisher.browser.launch.start", browserChannel: this.options.browserChannel, profileDirectory: this.profileDirectory, browserProfileDirectory: this.options.browserProfileDirectory ?? null }, "Launching publisher browser profile");
+    const browserId = this.options.browserId ?? this.options.browserChannel ?? "msedge";
+    this.logger.info({ operation: "publisher.browser.launch.start", browserId, profileDirectory: this.profileDirectory, browserProfileDirectory: this.options.browserProfileDirectory ?? null }, "Launching publisher browser profile");
     try {
       const context = await chromium.launchPersistentContext(this.profileDirectory, persistentContextOptions(this.options, headless));
-      this.logger.info({ operation: "publisher.browser.launch.complete", browserChannel: this.options.browserChannel }, "Publisher browser profile launched");
+      this.logger.info({ operation: "publisher.browser.launch.complete", browserId }, "Publisher browser profile launched");
       return context;
     }
-    catch (error) { throw classifyBrowserLaunchError(error); }
+    catch (error) { throw classifyBrowserLaunchError(error, browserId); }
   }
 
-  private async assertLoggedIn(page: Page): Promise<void> {
+  private async assertLoggedIn(page: Page, navigateToProfile = false): Promise<string | null> {
     await page.goto("https://x.com/home", { waitUntil: "domcontentloaded", timeout: this.operationTimeoutMs });
     const accountMenu = page.locator(xPublisherSelectors.accountMenuButton).first();
     await Promise.race([
@@ -135,19 +143,26 @@ export class XPlaywrightPublisher implements Publisher {
     if (!await accountMenu.isVisible().catch(() => false)) {
       throw new PublisherError("NOT_LOGGED_IN", "Publisher browser profile is not logged in", false, true);
     }
+    const activeUsername = await detectXUsername(page, xPublisherSelectors.accountMenuButton, navigateToProfile);
+    if (this.options.expectedUsername) {
+      if (!activeUsername || activeUsername !== this.options.expectedUsername.toLowerCase()) throw new PublisherError("ACCOUNT_INTERVENTION", `Publisher identity mismatch. Expected @${this.options.expectedUsername}.`, false, true);
+    }
+    return activeUsername;
   }
 
-  async checkSession(): Promise<void> {
-    await this.options.lease.run(() => this.checkSessionWithProfile());
+  async checkSession(): Promise<string | null> {
+    return this.options.lease.run(() => this.checkSessionWithProfile());
   }
 
-  private async checkSessionWithProfile(): Promise<void> {
+  private async checkSessionWithProfile(): Promise<string | null> {
     this.logger.info({ operation: "publisher.session.check.start" }, "Checking publisher session without publishing");
     const context = await this.context(false);
     const page = context.pages()[0] ?? await context.newPage();
     try {
-      await this.assertLoggedIn(page);
-      this.logger.info({ operation: "publisher.session.check", browserChannel: this.options.browserChannel, browserProfileDirectory: this.options.browserProfileDirectory ?? null }, "Publisher session is authenticated");
+      const activeUsername = await this.assertLoggedIn(page, true);
+      const account = activeUsername ? `@${activeUsername}` : null;
+      this.logger.info({ operation: "publisher.session.check", browserId: this.options.browserId ?? this.options.browserChannel, browserProfileDirectory: this.options.browserProfileDirectory ?? null, account }, "Publisher session is authenticated");
+      return account;
     } finally { await context.close().catch(() => undefined); }
   }
 

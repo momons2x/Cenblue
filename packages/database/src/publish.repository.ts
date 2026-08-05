@@ -15,20 +15,45 @@ export type PublishedResult = {
 export class PublishRepository {
   constructor(private readonly client: PrismaClient) {}
 
-  async createForPost(platformPostId: string, caption: string): Promise<PublishJob> {
+  async createForPost(platformPostId: string, caption: string, publisherIdentityId?: string): Promise<PublishJob> {
     return withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const sourcePost = await transaction.sourcePost.findUnique({
         where: { platformPostId },
-        include: { mediaAsset: true, publishJob: true },
+        include: { mediaAsset: true, publishJobs: true },
       });
       if (!sourcePost?.mediaAsset) throw new Error(`No validated media asset exists for post ${platformPostId}`);
-      if (sourcePost.publishJob) return sourcePost.publishJob;
+      const existing = sourcePost.publishJobs.find((job) => job.publisherIdentityId === (publisherIdentityId ?? null));
+      if (existing) return existing;
       const job = await transaction.publishJob.create({
         // The CLI command is an explicit operator confirmation.
-        data: { sourcePostId: sourcePost.id, mediaAssetId: sourcePost.mediaAsset.id, caption, status: "APPROVED" },
+        data: { sourcePostId: sourcePost.id, mediaAssetId: sourcePost.mediaAsset.id, publisherIdentityId, caption, status: "APPROVED" },
       });
       await transaction.sourcePost.update({ where: { id: sourcePost.id }, data: { status: "SCHEDULED" } });
       return job;
+    }));
+  }
+
+  async approveTargets(jobId: string, publisherIdentityIds: string[], scheduledFor: Date | null, caption: string, review?: { notes: string; tags: string }): Promise<string[]> {
+    if (publisherIdentityIds.length === 0) throw new Error("Select at least one Publisher identity.");
+    const uniquePublisherIds = [...new Set(publisherIdentityIds)];
+    return withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
+      const reviewJob = await transaction.publishJob.findUniqueOrThrow({ where: { id: jobId }, include: { publishedPost: true } });
+      if (reviewJob.publishedPost || !["READY_FOR_REVIEW", "FAILED", "MANUAL_ATTENTION"].includes(reviewJob.status)) throw new Error("This item is no longer awaiting review.");
+      const publishers = await transaction.browserIdentity.findMany({ where: { id: { in: uniquePublisherIds }, role: "PUBLISHER", enabled: true } });
+      if (publishers.length !== uniquePublisherIds.length) throw new Error("One or more selected Publisher identities are unavailable.");
+      const [firstPublisherId, ...additionalPublisherIds] = uniquePublisherIds;
+      await transaction.publishJob.update({ where: { id: jobId }, data: { publisherIdentityId: firstPublisherId, status: "APPROVED", scheduledFor, caption, nextAttemptAt: null, lastError: null, startedAt: null, heartbeatAt: null, claimToken: null, phase: null } });
+      const targetIds = [jobId];
+      for (const publisherIdentityId of additionalPublisherIds) {
+        const target = await transaction.publishJob.upsert({
+          where: { sourcePostId_publisherIdentityId: { sourcePostId: reviewJob.sourcePostId, publisherIdentityId } },
+          create: { sourcePostId: reviewJob.sourcePostId, mediaAssetId: reviewJob.mediaAssetId, publisherIdentityId, caption, status: "APPROVED", scheduledFor },
+          update: { caption, status: "APPROVED", scheduledFor, nextAttemptAt: null, lastError: null, startedAt: null, heartbeatAt: null, claimToken: null, phase: null },
+        });
+        targetIds.push(target.id);
+      }
+      await transaction.sourcePost.update({ where: { id: reviewJob.sourcePostId }, data: { status: "SCHEDULED", reviewNotes: review?.notes, internalTags: review?.tags } });
+      return targetIds;
     }));
   }
 
@@ -128,9 +153,10 @@ export class PublishRepository {
     }));
   }
 
-  async findDueScheduledIds(now: Date, limit = 10): Promise<string[]> {
+  async findDueScheduledIds(now: Date, limit = 10, publisherIdentityId?: string): Promise<string[]> {
     const jobs = await this.client.publishJob.findMany({
       where: {
+        publisherIdentityId,
         scheduledFor: { not: null, lte: now },
         OR: [
           { status: "APPROVED" },
@@ -144,10 +170,10 @@ export class PublishRepository {
     return jobs.map((job) => job.id);
   }
 
-  async claimNext(now: Date, staleBefore: Date): Promise<ClaimedPublishJob | null> {
+  async claimNext(now: Date, staleBefore: Date, publisherIdentityId?: string): Promise<ClaimedPublishJob | null> {
     return withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const stale = await transaction.publishJob.findMany({
-        where: { status: "RUNNING", OR: [{ heartbeatAt: { lt: staleBefore } }, { heartbeatAt: null, startedAt: { lt: staleBefore } }] }, select: { id: true, sourcePostId: true },
+        where: { status: "RUNNING", publisherIdentityId, OR: [{ heartbeatAt: { lt: staleBefore } }, { heartbeatAt: null, startedAt: { lt: staleBefore } }] }, select: { id: true, sourcePostId: true },
       });
       if (stale.length > 0) {
         await transaction.publishJob.updateMany({
@@ -160,6 +186,7 @@ export class PublishRepository {
       }
       const candidate = await transaction.publishJob.findFirst({
         where: {
+          publisherIdentityId,
           AND: [
             { OR: [{ status: "APPROVED" }, { status: "RETRY_WAIT", nextAttemptAt: { lte: now } }] },
             { OR: [{ scheduledFor: null }, { scheduledFor: { lte: now } }] },
@@ -183,13 +210,14 @@ export class PublishRepository {
     }));
   }
 
-  async claimById(jobId: string, now: Date, staleBefore: Date): Promise<ClaimedPublishJob | null> {
+  async claimById(jobId: string, now: Date, staleBefore: Date, publisherIdentityId?: string): Promise<ClaimedPublishJob | null> {
     return withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const existing = await transaction.publishJob.findUnique({
         where: { id: jobId },
         include: { publishedPost: true },
       });
       if (!existing) throw new Error("Publish job no longer exists.");
+      if (publisherIdentityId && existing.publisherIdentityId !== publisherIdentityId) throw new Error("This publish job belongs to a different Publisher identity.");
       if (existing.publishedPost || existing.status === "COMPLETED") throw new Error("This post has already been published.");
       if (existing.status === "RUNNING") {
         const lastHeartbeat = existing.heartbeatAt ?? existing.startedAt;

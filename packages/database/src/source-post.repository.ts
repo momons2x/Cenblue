@@ -20,7 +20,7 @@ export class SourcePostRepository {
     return new Set(posts.map((post) => post.platformPostId));
   }
 
-  async persistNew(sourceAccountId: string, posts: CollectedPost[], collectedAt: Date): Promise<PersistPostsResult> {
+  async persistNew(sourceAccountId: string, posts: CollectedPost[], collectedAt: Date, collectorIdentityId?: string): Promise<PersistPostsResult> {
     const result = await withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const uniquePosts = [...new Map(posts.map((post) => [post.platformPostId, post])).values()];
       const platformPostIds = uniquePosts.map((post) => post.platformPostId);
@@ -40,13 +40,14 @@ export class SourcePostRepository {
             sourceAccountId,
             status: "QUEUED_FOR_DOWNLOAD",
             collectedAt,
+            collectedByIdentityId: collectorIdentityId,
           })),
         });
         const created = await transaction.sourcePost.findMany({
           where: { platformPostId: { in: newPosts.map((post) => post.platformPostId) } },
           select: { id: true },
         });
-        await transaction.downloadJob.createMany({ data: created.map((post) => ({ sourcePostId: post.id })) });
+        await transaction.downloadJob.createMany({ data: created.map((post) => ({ sourcePostId: post.id, collectorIdentityId })) });
       }
 
       return { inserted: newPosts.length, duplicates: posts.length - newPosts.length };
@@ -54,7 +55,7 @@ export class SourcePostRepository {
     return result;
   }
 
-  async persistBookmarks(posts: BookmarkedPost[], collectedAt: Date): Promise<PersistPostsResult> {
+  async persistBookmarks(posts: BookmarkedPost[], collectedAt: Date, collectorIdentityId?: string): Promise<PersistPostsResult> {
     const uniquePosts = [...new Map(posts.map((post) => [post.platformPostId, post])).values()];
     const transactionResult = await withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const createdIds: string[] = [];
@@ -70,8 +71,8 @@ export class SourcePostRepository {
         });
         const { authorUsername: _authorUsername, ...postData } = post;
         void _authorUsername;
-        const created = await transaction.sourcePost.create({ data: { ...postData, sourceAccountId: author.id, discoveryKind: "BOOKMARK", status: "QUEUED_FOR_DOWNLOAD", collectedAt } });
-        await transaction.downloadJob.create({ data: { sourcePostId: created.id } });
+        const created = await transaction.sourcePost.create({ data: { ...postData, sourceAccountId: author.id, discoveryKind: "BOOKMARK", status: "QUEUED_FOR_DOWNLOAD", collectedAt, collectedByIdentityId: collectorIdentityId } });
+        await transaction.downloadJob.create({ data: { sourcePostId: created.id, collectorIdentityId } });
         createdIds.push(created.id);
       }
       return { result: { inserted: newPosts.length, duplicates: posts.length - newPosts.length }, createdIds };

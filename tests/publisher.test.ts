@@ -46,6 +46,17 @@ describe("publisher", () => {
     })).toEqual({ headless: false, timeout: 20_000, channel: "msedge", args: ["--profile-directory=Profile 1"] });
   });
 
+  it("launches a custom Chromium executable without a branded channel", () => {
+    expect(persistentContextOptions({
+      profileDirectory: "C:/Cenblue/Profile",
+      browserId: "brave",
+      browserExecutablePath: "C:/Browsers/Brave/brave.exe",
+      lease: { run: async (operation) => operation() },
+      diagnosticsDirectory: "storage/logs",
+      headless: true,
+    })).toEqual({ headless: true, timeout: 20_000, executablePath: "C:/Browsers/Brave/brave.exe", args: undefined });
+  });
+
   it("classifies a locked Edge profile as manual intervention", () => {
     expect(classifyBrowserLaunchError(new Error("user data directory is already in use"))).toMatchObject({
       kind: "PROFILE_IN_USE",

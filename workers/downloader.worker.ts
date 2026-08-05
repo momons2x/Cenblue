@@ -1,6 +1,6 @@
 import { applyStoredSettings, loadConfig } from "@cenblu/config";
 import { resolve } from "node:path";
-import { prisma, DownloadRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
+import { DatabaseExclusiveLease, identityLeaseName, prisma, DownloadRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
 import { createLogger } from "@cenblu/shared/logger";
 import { resolveCaption } from "@cenblu/publisher";
@@ -13,7 +13,11 @@ async function main(): Promise<void> {
   await verifyDownloadBinaries(runner, { ytDlp: config.ytDlpBinary, ffmpeg: config.ffmpegBinary, ffprobe: config.ffprobeBinary });
   const service = new DownloadService(
     new DownloadRepository(prisma),
-    new YtDlpService(runner, config.ytDlpBinary, config.ffmpegBinary, config.playwrightProfileDirectory ? resolve(config.playwrightProfilePath, config.playwrightProfileDirectory) : undefined),
+    new YtDlpService(runner, config.ytDlpBinary, config.ffmpegBinary, config.playwrightProfileDirectory ? resolve(config.playwrightProfilePath, config.playwrightProfileDirectory) : config.playwrightProfilePath, config.collectorBrowserId, async (collectorIdentityId) => {
+      const identity = await prisma.browserIdentity.findUniqueOrThrow({ where: { id: collectorIdentityId } });
+      const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+      return { profilePath: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.collectorBrowserId, runExclusive: (operation: () => Promise<void>) => lease.run(operation) };
+    }),
     new FfprobeService(runner, config.ffprobeBinary),
     new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath),
     logger,

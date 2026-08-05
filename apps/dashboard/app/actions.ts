@@ -7,13 +7,13 @@ import { randomUUID } from "node:crypto";
 import { basename, relative, resolve } from "node:path";
 import { z } from "zod";
 import { CollectionService, PlaywrightTimelineBrowser, XPlaywrightCollector } from "@cenblu/collector";
-import { applyStoredSettings, loadConfig } from "@cenblu/config";
-import { CollectionRunRepository, DatabaseExclusiveLease, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
+import { applyStoredSettings, browserBindingFingerprint, browserIds, loadConfig } from "@cenblu/config";
+import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
-import { FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
-import { LocalPublishMediaVerifier, PublishService, resolveCaption, validateCaption, XPlaywrightPublisher } from "@cenblu/publisher";
-import { ResourceBusyError } from "@cenblu/shared/lease";
+import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
+import { discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChromiumProfile, PublishService, resolveCaption, validateCaption, validateChromiumExecutable, XPlaywrightPublisher } from "@cenblu/publisher";
+import { combineExclusiveLeases, ResourceBusyError } from "@cenblu/shared/lease";
 import pino from "pino";
 import { scheduleFromFields } from "./lib/schedule";
 
@@ -40,8 +40,11 @@ function validImageSignature(type: keyof typeof manualImageTypes, bytes: Uint8Ar
 export async function addSource(formData: FormData) {
   const parsed = username.safeParse(formData.get("username"));
   if (!parsed.success) throw new Error("Enter a valid X username without @.");
+  const collectorIdentityId = id.parse(formData.get("collectorIdentityId"));
+  const collector = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR", enabled: true } });
+  if (!collector) throw new Error("Choose an enabled Collector identity.");
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  await new SourceAccountRepository(prisma, config.sourceAccountLimit).create({ username: parsed.data, collectLimit: limit.parse(formData.get("collectLimit") ?? 5) });
+  await new SourceAccountRepository(prisma, config.sourceAccountLimit).create({ username: parsed.data, collectLimit: limit.parse(formData.get("collectLimit") ?? 5), collectorIdentityId });
   refresh("/", "/sources");
 }
 
@@ -101,40 +104,49 @@ async function collectSources(sourceIds?: string[]): Promise<{ busy: boolean }> 
   const enabled = await sourceRepository.listEnabled(config.sourceAccountLimit);
   const sources = sourceIds ? enabled.filter((source) => sourceIds.includes(source.id)) : enabled;
   if (sources.length === 0) throw new Error("No enabled sources are available to collect.");
-  const runs = new CollectionRunRepository(prisma);
-  await runs.recoverStale(new Date(Date.now() - Math.max(config.workerLockTimeoutMinutes, 10) * 60_000));
-  const run = await runs.start(sources.map((source) => ({ id: source.id, targetNew: Math.min(source.collectLimit, config.postsPerSource) })));
-  const runtime = new RuntimeStatusRepository(prisma);
-  await runtime.update("dashboard-collector", "RUNNING", "collection");
-  const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "x-collector-profile", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-  const scopedAccounts = {
-    listEnabled: async () => sources,
-    recordCollectionSuccess: sourceRepository.recordCollectionSuccess.bind(sourceRepository),
-    recordCollectionFailure: sourceRepository.recordCollectionFailure.bind(sourceRepository),
-  };
-  const service = new CollectionService(scopedAccounts, new SourcePostRepository(prisma), new XPlaywrightCollector(new PlaywrightTimelineBrowser({ headless: config.playwrightHeadless, browserChannel: config.playwrightBrowserChannel, repositoryRoot: config.repositoryRoot, profileDirectory: config.playwrightProfilePath, browserProfileDirectory: config.playwrightProfileDirectory, allowExternalProfile: config.playwrightAllowExternalProfile, lease: browserLease, diagnosticsDirectory: config.logStoragePath, maxScrolls: config.collectorMaxScrolls, idleScrolls: config.collectorIdleScrolls, scrollDelayMs: config.collectorScrollDelayMs, maxSourceDurationMs: config.collectorMaxSourceSeconds * 1_000 }, logger)), logger, sources.length, config.postsPerSource, {
-    
-    sourceStarting: (source) => runs.startSource(run.id, source.id, source.username),
-    sourceProgress: (sourceId, progress) => runs.progressSource(run.id, sourceId, progress),
-    sourceFinished: (source) => runs.finishSource(run.id, source.id, source),
-    shouldCancel: () => runs.shouldCancel(run.id),
-  });
-  try {
-    const result = await service.runOnce();
-    await runs.finish(run.id, result.cancelled ? "CANCELLED" : result.sourcesFailed > 0 ? "FAILED" : "COMPLETED");
-    await runtime.update("dashboard-collector", result.cancelled ? "CANCELLED" : result.sourcesFailed > 0 ? "FAILED" : "IDLE");
-  } catch (error) {
-    if (error instanceof ResourceBusyError) {
-      await runs.finish(run.id, "BUSY", "The collector X browser profile is busy. Wait for the current operation to finish.");
-      if (sources.length === 1) await sourceRepository.recordCollectionFailure(sources[0].id, new Date(), "Browser is busy with another collection or publish operation.");
-      await runtime.update("dashboard-collector", "BUSY", undefined, "X browser profile is busy");
-      return { busy: true };
-    }
-    await runs.finish(run.id, "FAILED", error instanceof Error ? error.message : String(error));
-    await runtime.update("dashboard-collector", "FAILED", undefined, error instanceof Error ? error.message : String(error));
-    throw error;
+  const identities = await prisma.browserIdentity.findMany({ where: { role: "COLLECTOR", enabled: true } });
+  const identityMap = new Map(identities.map((identity) => [identity.id, identity]));
+  const grouped = new Map<string, typeof sources>();
+  for (const source of sources) {
+    const identityId = source.collectorIdentityId ?? "legacy-collector";
+    grouped.set(identityId, [...(grouped.get(identityId) ?? []), source]);
   }
-  return { busy: false };
+  let busy = false;
+  const groups = [...grouped.entries()];
+  for (let index = 0; index < groups.length; index += 2) {
+    const batch = groups.slice(index, index + 2);
+    const results = await Promise.all(batch.map(async ([identityId, identitySources]) => {
+      const identity = identityMap.get(identityId);
+      if (!identity) throw new Error("A source is assigned to a missing Collector identity.");
+      if (!identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername) throw new Error(`${identity.label} must be verified before collection.`);
+      const runs = new CollectionRunRepository(prisma);
+      await runs.recoverStale(new Date(Date.now() - Math.max(config.workerLockTimeoutMinutes, 10) * 60_000));
+      const run = await runs.start(identitySources.map((source) => ({ id: source.id, targetNew: Math.min(source.collectLimit, config.postsPerSource) })), identity.id);
+      const runtime = new RuntimeStatusRepository(prisma);
+      await runtime.update(`collector:${identity.id}`, "RUNNING", "collection");
+      const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+      const sourcePosts = new SourcePostRepository(prisma);
+      const service = new CollectionService({ listEnabled: async () => identitySources, recordCollectionSuccess: sourceRepository.recordCollectionSuccess.bind(sourceRepository), recordCollectionFailure: sourceRepository.recordCollectionFailure.bind(sourceRepository) }, {
+        listPlatformPostIds: sourcePosts.listPlatformPostIds.bind(sourcePosts),
+        persistNew: (sourceAccountId, posts, collectedAt) => sourcePosts.persistNew(sourceAccountId, posts, collectedAt, identity.id),
+      }, new XPlaywrightCollector(new PlaywrightTimelineBrowser({ headless: config.playwrightHeadless, browserId: identity.browserId as typeof config.collectorBrowserId, browserExecutablePath: identity.executablePath ?? undefined, repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserProfileDirectory: identity.profileDirectory ?? undefined, lease: browserLease, diagnosticsDirectory: config.logStoragePath, maxScrolls: config.collectorMaxScrolls, idleScrolls: config.collectorIdleScrolls, scrollDelayMs: config.collectorScrollDelayMs, maxSourceDurationMs: config.collectorMaxSourceSeconds * 1_000, expectedUsername: identity.expectedUsername ?? undefined }, logger)), logger, identitySources.length, config.postsPerSource, {
+        sourceStarting: (source) => runs.startSource(run.id, source.id, source.username), sourceProgress: (sourceId, progress) => runs.progressSource(run.id, sourceId, progress), sourceFinished: (source) => runs.finishSource(run.id, source.id, source), shouldCancel: () => runs.shouldCancel(run.id),
+      });
+      try {
+        const result = await service.runOnce();
+        await runs.finish(run.id, result.cancelled ? "CANCELLED" : result.sourcesFailed > 0 ? "FAILED" : "COMPLETED");
+        await runtime.update(`collector:${identity.id}`, result.cancelled ? "CANCELLED" : result.sourcesFailed > 0 ? "FAILED" : "IDLE");
+        return false;
+      } catch (error) {
+        await runs.finish(run.id, error instanceof ResourceBusyError ? "BUSY" : "FAILED", error instanceof Error ? error.message : String(error));
+        await runtime.update(`collector:${identity.id}`, error instanceof ResourceBusyError ? "BUSY" : "FAILED", undefined, error instanceof Error ? error.message : String(error));
+        if (error instanceof ResourceBusyError) return true;
+        throw error;
+      }
+    }));
+    busy ||= results.some(Boolean);
+  }
+  return { busy };
 }
 
 export async function collectSource(formData: FormData) {
@@ -157,27 +169,31 @@ export async function collectBookmarks(formData: FormData) {
   const query = new URLSearchParams();
   try {
     const target = limit.parse(formData.get("bookmarkLimit") ?? 5);
+    const collectorIdentityId = id.parse(formData.get("collectorIdentityId"));
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const identity = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR", enabled: true } });
+    if (!identity || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername) throw new Error("Choose a verified Collector identity.");
     const logger = pino({ level: "silent" });
     const repository = new SourcePostRepository(prisma);
-    const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "x-collector-profile", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+    const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
     const collector = new XPlaywrightCollector(new PlaywrightTimelineBrowser({
       headless: config.playwrightHeadless,
-      browserChannel: config.playwrightBrowserChannel,
+      browserId: identity.browserId as typeof config.collectorBrowserId,
+      browserExecutablePath: identity.executablePath ?? undefined,
       repositoryRoot: config.repositoryRoot,
-      profileDirectory: config.playwrightProfilePath,
-      browserProfileDirectory: config.playwrightProfileDirectory,
-      allowExternalProfile: config.playwrightAllowExternalProfile,
+      profileDirectory: resolve(config.repositoryRoot, identity.profilePath),
+      browserProfileDirectory: identity.profileDirectory ?? undefined,
       lease: browserLease,
       diagnosticsDirectory: config.logStoragePath,
       maxScrolls: config.collectorMaxScrolls,
       idleScrolls: config.collectorIdleScrolls,
       scrollDelayMs: config.collectorScrollDelayMs,
       maxSourceDurationMs: config.collectorMaxSourceSeconds * 1_000,
+      expectedUsername: identity.expectedUsername ?? undefined,
     }, logger));
     const knownPostIds = await repository.listAllPlatformPostIds();
     const posts = await collector.withSession(() => collector.collectBookmarks(target, { knownPostIds }));
-    const result = await repository.persistBookmarks(posts, new Date());
+    const result = await repository.persistBookmarks(posts, new Date(), identity.id);
     query.set("bookmarkInserted", String(result.inserted));
     query.set("bookmarkDuplicates", String(result.duplicates));
     refresh("/", "/sources", "/queue", "/downloads");
@@ -270,7 +286,8 @@ export async function approveReview(formData: FormData) {
   const scheduledFor = scheduleFromFields(formData, config.timezone, true);
   if (scheduledFor && scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
   const caption = z.string().max(280).parse(formData.get("caption"));
-  await new PublishRepository(prisma).approve(publishJobId, scheduledFor, caption, { notes: z.string().max(2_000).parse(formData.get("reviewNotes") ?? ""), tags: z.string().max(500).parse(formData.get("internalTags") ?? "") });
+  const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
+  await new PublishRepository(prisma).approveTargets(publishJobId, publisherIdentityIds, scheduledFor, caption, { notes: z.string().max(2_000).parse(formData.get("reviewNotes") ?? ""), tags: z.string().max(500).parse(formData.get("internalTags") ?? "") });
   refresh("/review", "/queue", "/");
 }
 
@@ -300,7 +317,11 @@ export async function bulkReview(formData: FormData) {
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
     const scheduledFor = scheduleFromFields(formData, config.timezone, true);
     if (scheduledFor && scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
-    await repository.approveMany(jobIds, scheduledFor);
+    const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
+    for (const jobId of jobIds) {
+      const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: jobId } });
+      await repository.approveTargets(jobId, publisherIdentityIds, scheduledFor, job.caption);
+    }
   } else if (decision === "reject") {
     for (const jobId of jobIds) await repository.reject(jobId);
   } else {
@@ -312,11 +333,12 @@ export async function bulkReview(formData: FormData) {
 
 export async function restoreDuplicate(formData: FormData) {
   const sourcePostId = id.parse(formData.get("sourcePostId"));
-  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { publishJob: true, mediaAsset: true } });
+  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { publishJobs: true, mediaAsset: true } });
+  const reviewJob = post.publishJobs.find((job) => job.publisherIdentityId === null) ?? post.publishJobs[0];
   await prisma.$transaction([
     prisma.sourcePost.update({ where: { id: sourcePostId }, data: { status: post.mediaAsset ? "READY_FOR_REVIEW" : "QUEUED_FOR_DOWNLOAD", duplicateReason: null } }),
-    ...(post.publishJob ? [prisma.publishJob.update({ where: { id: post.publishJob.id }, data: { status: "READY_FOR_REVIEW" } })] : []),
-    ...(!post.publishJob && post.mediaAsset ? [prisma.publishJob.create({ data: { sourcePostId, mediaAssetId: post.mediaAsset.id, caption: post.text, status: "READY_FOR_REVIEW" } })] : []),
+    ...(reviewJob ? [prisma.publishJob.update({ where: { id: reviewJob.id }, data: { status: "READY_FOR_REVIEW" } })] : []),
+    ...(!reviewJob && post.mediaAsset ? [prisma.publishJob.create({ data: { sourcePostId, mediaAssetId: post.mediaAsset.id, caption: post.text, status: "READY_FOR_REVIEW" } })] : []),
   ]);
   refresh("/review", "/queue");
 }
@@ -380,7 +402,11 @@ async function dashboardDownloader() {
     repository: new DownloadRepository(prisma),
     service: new DownloadService(
       new DownloadRepository(prisma),
-      new YtDlpService(runner, config.ytDlpBinary, config.ffmpegBinary, config.playwrightProfileDirectory ? resolve(config.playwrightProfilePath, config.playwrightProfileDirectory) : undefined),
+      new YtDlpService(runner, config.ytDlpBinary, config.ffmpegBinary, config.playwrightProfileDirectory ? resolve(config.playwrightProfilePath, config.playwrightProfileDirectory) : config.playwrightProfilePath, config.collectorBrowserId, async (collectorIdentityId) => {
+        const identity = await prisma.browserIdentity.findUniqueOrThrow({ where: { id: collectorIdentityId } });
+        const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+        return { profilePath: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.collectorBrowserId, runExclusive: (operation: () => Promise<void>) => lease.run(operation) };
+      }),
       new FfprobeService(runner, config.ffprobeBinary),
       new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath),
       pino({ level: "silent" }),
@@ -390,17 +416,22 @@ async function dashboardDownloader() {
   };
 }
 
-async function dashboardPublisher() {
+async function dashboardPublisher(publisherIdentityId: string) {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const identity = await prisma.browserIdentity.findFirst({ where: { id: publisherIdentityId, role: "PUBLISHER", enabled: true } });
+  if (!identity || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) throw new Error("The selected Publisher identity must be verified again.");
   const logger = pino({ level: "silent" });
   const repository = new PublishRepository(prisma);
-  const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "x-publisher-profile", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+  const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+  const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
   return new PublishService(
     repository,
-    new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: config.publisherProfilePath, browserChannel: config.playwrightBrowserChannel, browserProfileDirectory: config.publisherProfileDirectory, allowExternalProfile: config.playwrightAllowExternalProfile, lease: browserLease, diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000 }, logger),
+    new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, browserLease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername ?? undefined }, logger),
     new LocalPublishMediaVerifier(config.videoStoragePath),
     logger,
     config.publishAllowEmptyCaption,
+    3,
+    identity.id,
   );
 }
 
@@ -408,7 +439,9 @@ export async function publishNow(formData: FormData) {
   let actionError: string | null = null;
   try {
     const publishJobId = id.parse(formData.get("publishJobId"));
-    const service = await dashboardPublisher();
+    const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, select: { publisherIdentityId: true } });
+    if (!job.publisherIdentityId) throw new Error("Choose a Publisher identity before publishing.");
+    const service = await dashboardPublisher(job.publisherIdentityId);
     if (!await service.processJob(publishJobId)) actionError = "This publish job could not be claimed.";
     if (!actionError) {
       const result = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, select: { status: true, lastError: true } });
@@ -495,19 +528,23 @@ export async function fetchPostPerformance(formData: FormData) {
   const publishedPostId = id.parse(formData.get("publishedPostId"));
   const query = new URLSearchParams({ performance: publishedPostId });
   try {
-    const record = await prisma.publishedPost.findUniqueOrThrow({ where: { id: publishedPostId }, select: { platformUrl: true } });
+    const record = await prisma.publishedPost.findUniqueOrThrow({ where: { id: publishedPostId }, select: { platformUrl: true, publishJob: { select: { publisherIdentity: true } } } });
     if (!record.platformUrl) throw new Error("This publication does not have an X post URL.");
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-    const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "x-publisher-profile", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+    const identity = record.publishJob.publisherIdentity;
+    if (!identity) throw new Error("This publication has no Publisher identity.");
+    const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
     const browser = new PlaywrightTimelineBrowser({
       headless: config.playwrightHeadless,
-      browserChannel: config.playwrightBrowserChannel,
+      browserId: identity.browserId as typeof config.publisherBrowserId,
+      browserExecutablePath: identity.executablePath ?? undefined,
       repositoryRoot: config.repositoryRoot,
-      profileDirectory: config.publisherProfilePath,
-      browserProfileDirectory: config.publisherProfileDirectory,
-      allowExternalProfile: config.playwrightAllowExternalProfile,
+      profileDirectory: resolve(config.repositoryRoot, identity.profilePath),
+      browserProfileDirectory: identity.profileDirectory ?? undefined,
       lease,
       diagnosticsDirectory: config.logStoragePath,
+      profileRole: "publisher",
+      expectedUsername: identity.expectedUsername ?? undefined,
     }, pino({ level: "silent" }));
     const metrics = await browser.readPostMetrics(record.platformUrl);
     query.set("fetchedAt", new Date().toISOString());
@@ -528,9 +565,9 @@ export async function downloadAgain(formData: FormData) {
 
 export async function sendToReview(formData: FormData) {
   const sourcePostId = id.parse(formData.get("sourcePostId"));
-  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { mediaAsset: true, publishJob: true } });
+  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { mediaAsset: true, publishJobs: true } });
   if (!post.mediaAsset || post.mediaAsset.localRemovedAt) throw new Error("This post has no available local media.");
-  if (post.publishJob) throw new Error("This post already has a review or publish job.");
+  if (post.publishJobs.length > 0) throw new Error("This post already has a review or publish job.");
   if (post.status !== "DOWNLOADED") throw new Error("Only downloaded posts can enter review.");
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   const scheduled = await new SchedulerRepository(prisma).scheduleDownloadedAsset(sourcePostId, (source) => resolveCaption(source, config.captionTemplates));
@@ -554,6 +591,251 @@ export async function bulkDownloadAction(formData: FormData) {
   const operation = z.enum(["retry", "download"]).parse(formData.get("operation"));
   if (operation === "retry") await bulkRetryDownloads(formData);
   else await bulkDownloadNow(formData);
+}
+
+const browserRole = z.enum(["collector", "publisher"]);
+const browserId = z.enum(browserIds);
+
+function browserSessionKeys(role: "collector" | "publisher"): string[] {
+  const prefix = role.toUpperCase();
+  return [`${prefix}_BROWSER_SESSION_VERIFIED_AT`, `${prefix}_BROWSER_SESSION_ACCOUNT`, `${prefix}_BROWSER_SESSION_BINDING`, `${prefix}_BROWSER_SESSION_ERROR`];
+}
+
+export async function saveBrowserBinding(formData: FormData) {
+  const role = browserRole.parse(formData.get("role"));
+  const selectedId = browserId.parse(formData.get("browserId"));
+  const lock = await prisma.schedulerLock.findUnique({ where: { name: `x-${role}-profile` } });
+  if (lock && lock.lockedUntil > new Date()) throw new Error(`The ${role} browser is busy. Wait for it to finish before changing browsers.`);
+  let executablePath: string;
+  if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
+  else {
+    const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
+    if (!installation) throw new Error("That browser is not currently detected on this device.");
+    executablePath = installation.executablePath;
+  }
+  executablePath = await validateChromiumExecutable(executablePath);
+  const prefix = role === "collector" ? "DEVICE_COLLECTOR" : "DEVICE_PUBLISHER";
+  const settings = new SettingsRepository(prisma);
+  await settings.setMany({ [`${prefix}_BROWSER_ID`]: selectedId, [`${prefix}_BROWSER_EXECUTABLE`]: executablePath });
+  await settings.deleteMany(browserSessionKeys(role));
+  refresh("/settings", "/");
+}
+
+export async function openBrowserLogin(formData: FormData) {
+  const role = browserRole.parse(formData.get("role"));
+  const settings = new SettingsRepository(prisma);
+  const stored = await settings.getAll();
+  const config = applyStoredSettings(loadConfig(), stored);
+  const selectedBrowserId = role === "collector" ? config.collectorBrowserId : config.publisherBrowserId;
+  const executablePath = (role === "collector" ? config.collectorBrowserExecutablePath : config.publisherBrowserExecutablePath)
+    ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedBrowserId)?.executablePath;
+  const profilePath = role === "collector" ? config.playwrightProfilePath : config.publisherProfilePath;
+  const profileDirectory = role === "collector" ? config.playwrightProfileDirectory : config.publisherProfileDirectory;
+  if (!executablePath) throw new Error(`Select the ${role} browser before opening its login profile.`);
+  await settings.deleteMany(browserSessionKeys(role));
+  await mkdir(profilePath, { recursive: true });
+  await openChromiumProfile(executablePath, profilePath, profileDirectory);
+  refresh("/settings", "/");
+}
+
+export async function checkBrowserSession(formData: FormData) {
+  const role = browserRole.parse(formData.get("role"));
+  const settings = new SettingsRepository(prisma);
+  await settings.deleteMany(browserSessionKeys(role));
+  const stored = await settings.getAll();
+  const config = applyStoredSettings(loadConfig(), stored);
+  const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), `x-${role}-profile`, Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+  const logger = pino({ level: "silent" });
+  try {
+    const account = role === "collector"
+      ? await new PlaywrightTimelineBrowser({ headless: false, browserId: config.collectorBrowserId, browserExecutablePath: config.collectorBrowserExecutablePath, repositoryRoot: config.repositoryRoot, profileDirectory: config.playwrightProfilePath, browserProfileDirectory: config.playwrightProfileDirectory, allowExternalProfile: config.playwrightAllowExternalProfile, lease, diagnosticsDirectory: config.logStoragePath }, logger).checkSession()
+      : await new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: config.publisherProfilePath, browserId: config.publisherBrowserId, browserExecutablePath: config.publisherBrowserExecutablePath, browserProfileDirectory: config.publisherProfileDirectory, allowExternalProfile: config.playwrightAllowExternalProfile, lease, diagnosticsDirectory: config.logStoragePath, headless: false }, logger).checkSession();
+    const prefix = role.toUpperCase();
+    await settings.setMany({
+      [`${prefix}_BROWSER_SESSION_VERIFIED_AT`]: new Date().toISOString(),
+      [`${prefix}_BROWSER_SESSION_ACCOUNT`]: account ?? "Authenticated X account",
+      [`${prefix}_BROWSER_SESSION_BINDING`]: browserBindingFingerprint(config, role),
+    });
+  } catch (error) {
+    await settings.setMany({ [`${role.toUpperCase()}_BROWSER_SESSION_ERROR`]: error instanceof ResourceBusyError ? "Close the Cenblue browser profile window, then check again." : error instanceof Error ? error.message.split("\n")[0] : "Session verification failed." });
+  }
+  refresh("/settings", "/");
+}
+
+export async function resetBrowserProfile(formData: FormData) {
+  const role = browserRole.parse(formData.get("role"));
+  const settings = new SettingsRepository(prisma);
+  const config = applyStoredSettings(loadConfig(), await settings.getAll());
+  const profilePath = role === "collector" ? config.playwrightProfilePath : config.publisherProfilePath;
+  if (!inside(resolve(config.repositoryRoot, "storage", "browser-profiles"), profilePath)) throw new Error("Only dashboard-managed browser profiles can be reset.");
+  const lock = await prisma.schedulerLock.findUnique({ where: { name: `x-${role}-profile` } });
+  if (lock && lock.lockedUntil > new Date()) throw new Error(`The ${role} browser is busy.`);
+  await rm(profilePath, { recursive: true, force: true });
+  await settings.deleteMany(browserSessionKeys(role));
+  refresh("/settings", "/");
+}
+
+export async function createBrowserIdentity(formData: FormData) {
+  const role = z.enum(["COLLECTOR", "PUBLISHER"]).parse(formData.get("role"));
+  const selectedId = browserId.parse(formData.get("browserId"));
+  let executablePath: string;
+  if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
+  else {
+    const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
+    if (!installation) throw new Error("That browser is not currently detected on this device.");
+    executablePath = installation.executablePath;
+  }
+  executablePath = await validateChromiumExecutable(executablePath);
+  const config = loadConfig();
+  const identityRepository = new BrowserIdentityRepository(prisma);
+  const identityCount = await prisma.browserIdentity.count({ where: { role } });
+  const identity = await identityRepository.create({
+    role,
+    label: `${role === "COLLECTOR" ? "Collector" : "Publisher"} ${identityCount + 1}`,
+    browserId: selectedId,
+    executablePath,
+    profileRoot: resolve(config.repositoryRoot, "storage", "browser-profiles"),
+  });
+  const profilePath = resolve(config.repositoryRoot, identity.profilePath);
+  await mkdir(profilePath, { recursive: true });
+  await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
+  refresh("/settings", "/sources", "/review", "/");
+  redirect(`/settings?profileOpened=${encodeURIComponent(identity.id)}`);
+}
+
+export async function openIdentityLogin(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const repository = new BrowserIdentityRepository(prisma);
+  const identity = await repository.find(identityId);
+  if (!identity || !identity.enabled) throw new Error("This browser identity is unavailable.");
+  const activeLock = await prisma.schedulerLock.findUnique({ where: { name: identityLeaseName(identity.id) } });
+  if (activeLock && activeLock.lockedUntil > new Date()) throw new Error("This identity is busy with another browser operation.");
+  const executablePath = identity.executablePath ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === identity.browserId)?.executablePath;
+  if (!executablePath) throw new Error("The configured browser executable was not found.");
+  await repository.clearVerification(identity.id);
+  const profilePath = resolve(loadConfig().repositoryRoot, identity.profilePath);
+  await mkdir(profilePath, { recursive: true });
+  await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
+  refresh("/settings", "/");
+  redirect(`/settings?profileOpened=${encodeURIComponent(identity.id)}`);
+}
+
+export async function addIdentityProfile(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const expectedUsername = username.parse(formData.get("expectedUsername"));
+  const repository = new BrowserIdentityRepository(prisma);
+  const identity = await repository.find(identityId);
+  if (!identity || !identity.enabled) throw new Error("This browser identity is unavailable.");
+  const activeLock = await prisma.schedulerLock.findUnique({ where: { name: identityLeaseName(identity.id) } });
+  if (activeLock && activeLock.lockedUntil > new Date()) throw new Error("This identity is busy with another browser operation.");
+  const executablePath = identity.executablePath ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === identity.browserId)?.executablePath;
+  if (!executablePath) throw new Error("The configured browser executable was not found. Choose another browser in technical settings.");
+  await prisma.browserIdentity.update({ where: { id: identity.id }, data: { expectedUsername: expectedUsername.toLowerCase(), verifiedAt: null, verifiedUsername: null, verifiedFingerprint: null, verificationError: null, profileDeletedAt: null } });
+  const profilePath = resolve(loadConfig().repositoryRoot, identity.profilePath);
+  await mkdir(profilePath, { recursive: true });
+  await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
+  refresh("/settings", "/");
+  redirect(`/settings?profileOpened=${encodeURIComponent(identity.id)}`);
+}
+
+export async function updateIdentityBrowser(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const selectedId = browserId.parse(formData.get("browserId"));
+  let executablePath: string;
+  if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
+  else {
+    const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
+    if (!installation) throw new Error("That browser is not currently detected on this device.");
+    executablePath = installation.executablePath;
+  }
+  executablePath = await validateChromiumExecutable(executablePath);
+  const config = loadConfig();
+  const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identityId), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+  await lease.run(() => new BrowserIdentityRepository(prisma).updateBinding(identityId, selectedId, executablePath));
+  refresh("/settings", "/");
+}
+
+export async function checkIdentitySession(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const repository = new BrowserIdentityRepository(prisma);
+  const identity = await repository.find(identityId);
+  if (!identity) throw new Error("This browser identity is not configured.");
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+  const profilePath = resolve(config.repositoryRoot, identity.profilePath);
+  const logger = pino({ level: "silent" });
+  try {
+    const account = identity.role === "COLLECTOR"
+      ? await new PlaywrightTimelineBrowser({ headless: false, browserId: identity.browserId as typeof config.collectorBrowserId, browserExecutablePath: identity.executablePath ?? undefined, repositoryRoot: config.repositoryRoot, profileDirectory: profilePath, browserProfileDirectory: identity.profileDirectory ?? undefined, lease, diagnosticsDirectory: config.logStoragePath }, logger).checkSession()
+      : await new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: profilePath, browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease, diagnosticsDirectory: config.logStoragePath, headless: false }, logger).checkSession();
+    const normalizedAccount = account?.replace(/^@/, "").toLowerCase();
+    if (!normalizedAccount) throw new Error("The active X username could not be detected.");
+    if (identity.expectedUsername && normalizedAccount !== identity.expectedUsername) throw new Error(`This profile is signed into @${normalizedAccount}, not @${identity.expectedUsername}.`);
+    await repository.setVerification(identity.id, normalizedAccount, identityFingerprint(identity));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message.split("\n").find((line) => line.trim())?.trim() : null;
+    await repository.setVerificationError(identity.id, error instanceof ResourceBusyError ? "Close this identity's browser window, then verify again." : detail || "Session verification failed.");
+  }
+  refresh("/settings", "/");
+}
+
+export async function toggleBrowserIdentity(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const enabled = z.enum(["true", "false"]).transform((value) => value === "true").parse(formData.get("enabled"));
+  await new BrowserIdentityRepository(prisma).setEnabled(identityId, enabled);
+  refresh("/settings", "/sources", "/review", "/");
+}
+
+export async function toggleIdentityAutomatic(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const automatic = z.enum(["true", "false"]).transform((value) => value === "true").parse(formData.get("automatic"));
+  await new BrowserIdentityRepository(prisma).setAutomatic(identityId, automatic);
+  refresh("/settings", "/");
+}
+
+export async function deleteIdentityProfile(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const repository = new BrowserIdentityRepository(prisma);
+  const identity = await repository.find(identityId);
+  if (!identity) throw new Error("Browser identity no longer exists.");
+  const config = loadConfig();
+  const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+  const managedRoleRoot = resolve(config.repositoryRoot, "storage", "browser-profiles", identity.role === "COLLECTOR" ? "collector" : "publisher");
+  if (!inside(managedRoleRoot, resolve(config.repositoryRoot, identity.profilePath))) throw new Error("Legacy browser profiles are preserved and cannot be deleted from this action. Create a managed identity or remove the legacy profile manually.");
+  const result = await lease.run(() => new BrowserProfileRemovalService(config.repositoryRoot).removeIdentity(identity.role === "COLLECTOR" ? "collector" : "publisher", basename(identity.profilePath)));
+  if (result.status === "failed" || result.status === "residual") throw new Error(result.error ?? "The browser profile could not be fully deleted.");
+  await repository.clearVerification(identity.id, new Date());
+  await prisma.browserIdentity.update({ where: { id: identity.id }, data: { expectedUsername: null, enabled: false, automaticEnabled: false } });
+  refresh("/settings", "/");
+  redirect(`/settings?profileDeleted=${encodeURIComponent(identity.id)}`);
+}
+
+async function withIdentityLeases<T>(identityIds: string[], operation: () => Promise<T>): Promise<T> {
+  const config = loadConfig();
+  const leases = identityIds.sort().map((identityId) => new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identityId), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000));
+  const run = (index: number): Promise<T> => index >= leases.length ? operation() : leases[index].run(() => run(index + 1));
+  return run(0);
+}
+
+export async function clearAllBrowserProfiles(formData: FormData) {
+  if (z.string().parse(formData.get("confirmation")).trim() !== "DELETE ALL PROFILES") throw new Error('Type "DELETE ALL PROFILES" to confirm.');
+  const identities = await prisma.browserIdentity.findMany({ select: { id: true } });
+  const outcomes = await withIdentityLeases(identities.map((identity) => identity.id), () => new BrowserProfileRemovalService(loadConfig().repositoryRoot).clearAll());
+  const failed = outcomes.filter((outcome) => outcome.status === "failed" || outcome.status === "residual");
+  if (failed.length > 0) throw new Error(`Some browser profiles could not be deleted: ${failed.map((outcome) => outcome.role).join(", ")}`);
+  await prisma.browserIdentity.updateMany({ data: { expectedUsername: null, verifiedUsername: null, verifiedAt: null, verifiedFingerprint: null, verificationError: null, profileDeletedAt: new Date(), enabled: false, automaticEnabled: false } });
+  await new SettingsRepository(prisma).deleteMany([...browserSessionKeys("collector"), ...browserSessionKeys("publisher")]);
+  refresh("/settings", "/");
+  redirect(`/settings?allProfilesDeleted=${identities.length}`);
+}
+
+export async function assignSourceCollector(formData: FormData) {
+  const sourceId = id.parse(formData.get("sourceId"));
+  const collectorIdentityId = id.parse(formData.get("collectorIdentityId"));
+  const collector = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR", enabled: true } });
+  if (!collector) throw new Error("Choose an enabled Collector identity.");
+  await prisma.sourceAccount.update({ where: { id: sourceId }, data: { collectorIdentityId } });
+  refresh("/sources");
 }
 
 export async function saveSettings(formData: FormData) {
@@ -587,6 +869,12 @@ export async function saveCaptionSettings(formData: FormData) {
   redirect("/settings?captionSaved=1");
 }
 
+export async function saveReviewSettings(formData: FormData) {
+  await new SettingsRepository(prisma).setMany({ REVIEW_VIDEO_PREVIEW_ENABLED: z.enum(["true", "false"]).parse(formData.get("videoPreviewEnabled")) });
+  refresh("/settings", "/review");
+  redirect("/settings?reviewSaved=1");
+}
+
 export async function publishManualPost(formData: FormData) {
   const image = formData.get("image");
   const hasImage = image instanceof File && image.size > 0;
@@ -606,12 +894,19 @@ export async function publishManualPost(formData: FormData) {
       imagePath = resolve(config.tempStoragePath, `manual-post-${randomUUID()}.${manualImageTypes[type]}`);
       await writeFile(imagePath, bytes);
     }
+    const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
+    const identities = await prisma.browserIdentity.findMany({ where: { id: { in: publisherIdentityIds }, role: "PUBLISHER", enabled: true } });
+    if (identities.length !== new Set(publisherIdentityIds).size) throw new Error("One or more Publisher identities are unavailable.");
     const logger = pino({ level: "silent" });
-    const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "x-publisher-profile", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-    const publisher = new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: config.publisherProfilePath, browserChannel: config.playwrightBrowserChannel, browserProfileDirectory: config.publisherProfileDirectory, allowExternalProfile: config.playwrightAllowExternalProfile, lease: browserLease, diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000 }, logger);
-    const manualId = `manual-${Date.now()}`;
-    const result = await publisher.publish({ jobId: manualId, platformPostId: manualId, mediaPath: imagePath, mediaKind: hasImage ? "image" : null, caption, fileSize: hasImage ? image.size : 0, durationSeconds: 0, width: 0, height: 0, codec: null });
-    publishedUrl = result.platformUrl;
+    for (const identity of identities) {
+      if (!identity.expectedUsername || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) throw new Error(`${identity.label} must be verified before publishing.`);
+      const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+      const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+      const publisher = new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, browserLease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername }, logger);
+      const manualId = `manual-${identity.id}-${Date.now()}`;
+      const result = await publisher.publish({ jobId: manualId, platformPostId: manualId, mediaPath: imagePath, mediaKind: hasImage ? "image" : null, caption, fileSize: hasImage ? image.size : 0, durationSeconds: 0, width: 0, height: 0, codec: null });
+      publishedUrl ??= result.platformUrl;
+    }
   } catch (error) {
     errorMessage = error instanceof Error ? error.message : String(error);
   } finally {

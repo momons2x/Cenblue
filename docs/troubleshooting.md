@@ -4,7 +4,13 @@ Start with the dashboard Logs page and the component logs under `storage/logs`.
 
 ## Browser Failures
 
-Close all Edge processes for profile-in-use errors. Use repository-local clones instead of Edge's default user-data root. Run the matching session check after login and restart the dashboard after `.env` changes.
+Close the Cenblue-managed browser window for profile-in-use errors, then select **Verify session** again. Browser setup supports detected Windows Chromium browsers and a custom Chromium executable path. If validation fails, confirm the selected file is the real browser executable and that the installed version can be controlled by the bundled Playwright version.
+
+If verification reports that the profile is not logged in, select **Open and log in**, complete X login, close the isolated browser completely, and retry verification. Collector and Publisher use separate profiles and may use different browsers.
+
+If verification reports an identity mismatch, sign out of the managed profile and log into the exact username shown on its card. Cenblue intentionally blocks collection and publication through another account even when that account is authenticated.
+
+After profile deletion, the card must show **Deleted** and a success message. If Windows keeps profile files open, close that identity's browser window and retry. Clear-all refuses or reports failure rather than deleting outside `storage/browser-profiles`.
 
 ## Queue Failures
 

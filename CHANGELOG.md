@@ -8,6 +8,11 @@ The project intends to follow semantic versioning once release automation is est
 
 ### Added
 
+- First-class multiple Collector and Publisher identities with isolated profiles, source ownership, account verification, profile-scoped leases, and dashboard health cards.
+- Multi-Publisher review targeting with independent jobs, schedules, retries, queue identity labels, and publication history.
+- Explicit profile-file states, deletion success feedback, safe quarantine removal, and identity-preserving clear-all browser profile cleanup.
+- Dashboard-managed browser setup with independent Collector and Publisher selection, Windows discovery for common Chromium browsers, custom executable validation, isolated profiles, login launch, session verification, and profile reset.
+- Browser-bound session verification that records the authenticated X account and invalidates stale verification after binding changes.
 - Compact Review cards with an accessible modal for video preview, caption drafts, scheduling, approval, and queue actions.
 - Optional per-video FFmpeg compression during Review. Validated H.264/AAC output replaces the active file only when smaller.
 - A guided `pnpm setup` workflow for local configuration, storage creation, migrations, media-tool detection, and optional Edge session setup.
@@ -19,6 +24,7 @@ The project intends to follow semantic versioning once release automation is est
 
 ### Changed
 
+- Playwright and authenticated `yt-dlp` launches now follow the selected Chromium browser instead of assuming Microsoft Edge globally.
 - Unscheduled approvals are manual-only across dashboard and pipeline workers.
 - Confirmation controls use non-blocking React state instead of browser disclosure behavior.
 

@@ -22,12 +22,15 @@ model SourceAccount {
   captionTemplate        String?
   attributionTemplate    String?
   hashtagRules           String?
+  collectorIdentityId    String?
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
   posts                   SourcePost[]
   collectionRunSources    CollectionRunSource[]
+  collectorIdentity       BrowserIdentity? @relation("AssignedCollector", fields: [collectorIdentityId], references: [id], onDelete: SetNull)
 
   @@index([archivedAt])
+  @@index([collectorIdentityId, enabled])
 }
 
 model SourcePost {
@@ -47,16 +50,19 @@ model SourcePost {
   internalTags      String?
   duplicateGroupId  String?
   duplicateReason   String?
+  collectedByIdentityId String?
   sourceAccount     SourceAccount @relation(fields: [sourceAccountId], references: [id], onDelete: Cascade)
   downloadJob       DownloadJob?
   mediaAsset        MediaAsset?
-  publishJob        PublishJob?
+  publishJobs       PublishJob[]
+  collectedByIdentity BrowserIdentity? @relation("CollectedBy", fields: [collectedByIdentityId], references: [id], onDelete: SetNull)
   duplicateGroup    DuplicateGroup? @relation(fields: [duplicateGroupId], references: [id], onDelete: SetNull)
 
   @@index([sourceAccountId, postedAt])
   @@index([status])
   @@index([discoveryKind])
   @@index([duplicateGroupId])
+  @@index([collectedByIdentityId])
 }
 
 model DownloadJob {
@@ -70,11 +76,14 @@ model DownloadJob {
   completedAt   DateTime?
   priority      Int        @default(0)
   requestedAt   DateTime?
+  collectorIdentityId String?
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
   sourcePost    SourcePost @relation(fields: [sourcePostId], references: [id], onDelete: Cascade)
+  collectorIdentity BrowserIdentity? @relation(fields: [collectorIdentityId], references: [id], onDelete: SetNull)
 
   @@index([status, nextAttemptAt])
+  @@index([collectorIdentityId, status])
 }
 
 model MediaAsset {
@@ -94,13 +103,14 @@ model MediaAsset {
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
   sourcePost      SourcePost @relation(fields: [sourcePostId], references: [id], onDelete: Cascade)
-  publishJob      PublishJob?
+  publishJobs     PublishJob[]
 }
 
 model PublishJob {
   id            String         @id @default(cuid())
-  sourcePostId  String         @unique
-  mediaAssetId  String         @unique
+  sourcePostId  String
+  mediaAssetId  String
+  publisherIdentityId String?
   caption       String
   status        String         @default("PENDING")
   scheduledFor  DateTime?
@@ -117,9 +127,42 @@ model PublishJob {
   sourcePost    SourcePost     @relation(fields: [sourcePostId], references: [id], onDelete: Cascade)
   mediaAsset    MediaAsset     @relation(fields: [mediaAssetId], references: [id], onDelete: Cascade)
   publishedPost PublishedPost?
+  publisherIdentity BrowserIdentity? @relation(fields: [publisherIdentityId], references: [id], onDelete: Restrict)
 
   @@index([status, scheduledFor, nextAttemptAt])
   @@index([status, heartbeatAt])
+  @@index([publisherIdentityId, status, scheduledFor])
+  @@unique([sourcePostId, publisherIdentityId])
+  @@unique([mediaAssetId, publisherIdentityId])
+}
+
+model BrowserIdentity {
+  id                String   @id @default(cuid())
+  role              String
+  label             String
+  expectedUsername  String?
+  enabled           Boolean  @default(true)
+  automaticEnabled  Boolean  @default(false)
+  browserId         String
+  executablePath    String?
+  profilePath       String
+  profileDirectory  String?
+  verifiedUsername  String?
+  verifiedAt        DateTime?
+  verifiedFingerprint String?
+  verificationError String?
+  profileDeletedAt  DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  assignedSources   SourceAccount[] @relation("AssignedCollector")
+  collectedPosts    SourcePost[] @relation("CollectedBy")
+  downloadJobs      DownloadJob[]
+  collectionRuns    CollectionRun[]
+  publishJobs       PublishJob[]
+
+  @@index([role, enabled])
+  @@unique([role, expectedUsername])
+  @@unique([profilePath])
 }
 
 model DuplicateGroup {
@@ -172,14 +215,17 @@ model CollectionRun {
   cancelRequestedAt DateTime?
   heartbeatAt       DateTime @default(now())
   targetNew         Int      @default(0)
+  collectorIdentityId String?
   eligibleExamined  Int      @default(0)
   knownSkipped      Int      @default(0)
   newFound          Int      @default(0)
   inserted          Int      @default(0)
   contentDuplicates Int      @default(0)
   sources           CollectionRunSource[]
+  collectorIdentity BrowserIdentity? @relation(fields: [collectorIdentityId], references: [id], onDelete: SetNull)
 
   @@index([status, startedAt])
+  @@index([collectorIdentityId, status])
 }
 
 model CollectionRunSource {

@@ -9,6 +9,7 @@ export type CreateSourceAccount = {
   captionTemplate?: string | null;
   attributionTemplate?: string | null;
   hashtagRules?: string | null;
+  collectorIdentityId?: string | null;
 };
 
 export type UpdateSourceAccount = Partial<CreateSourceAccount>;
@@ -51,6 +52,14 @@ export class SourceAccountRepository {
   listEnabled(limit: number): Promise<SourceAccount[]> {
     return this.client.sourceAccount.findMany({
       where: { enabled: true, archivedAt: null, managedSource: true },
+      orderBy: { createdAt: "asc" },
+      take: limit,
+    });
+  }
+
+  listEnabledForCollector(collectorIdentityId: string, limit: number): Promise<SourceAccount[]> {
+    return this.client.sourceAccount.findMany({
+      where: { collectorIdentityId, enabled: true, archivedAt: null, managedSource: true },
       orderBy: { createdAt: "asc" },
       take: limit,
     });

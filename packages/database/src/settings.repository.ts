@@ -15,4 +15,9 @@ export class SettingsRepository {
       update: { value },
     })));
   }
+
+  async deleteMany(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    await this.client.appSetting.deleteMany({ where: { key: { in: keys } } });
+  }
 }

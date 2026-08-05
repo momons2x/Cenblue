@@ -54,6 +54,13 @@ describe("downloader services", () => {
     expect(arguments_).toContain("edge:C:/profile/Profile 1");
   });
 
+  it("uses the cookie adapter for the selected Chromium browser", async () => {
+    let arguments_: string[] = [];
+    const runner: ProcessRunner = { run: async (_command, args) => { arguments_ = args; return { stdout: "", stderr: "" }; } };
+    await new YtDlpService(runner, "yt-dlp", "ffmpeg", "C:/profile", "brave").download("https://x.com/a/status/1", "video.mp4", "thumb.jpg");
+    expect(arguments_).toContain("brave:C:/profile");
+  });
+
   it("parses valid ffprobe video metadata and rejects audio-only output", async () => {
     const probe = new FfprobeService(new FixtureRunner(JSON.stringify({ streams: [{ codec_type: "video", codec_name: "h264", width: 1280, height: 720 }], format: { duration: "12.5" } })), "ffprobe");
     await expect(probe.inspect("video.mp4")).resolves.toEqual({ durationSeconds: 12.5, width: 1280, height: 720, codec: "h264" });

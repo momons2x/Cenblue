@@ -7,7 +7,8 @@
     ".": "./src/index.ts",
     "./logger": "./src/logger.ts",
     "./diagnostics": "./src/diagnostics.ts",
-    "./lease": "./src/lease.ts"
+    "./lease": "./src/lease.ts",
+    "./x-identity": "./src/x-identity.ts"
   },
   "dependencies": {
     "pino": "10.3.1",

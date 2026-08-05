@@ -48,9 +48,10 @@ function CompressionSubmit() {
   </div>;
 }
 
-export function ReviewList({ jobs, timeZone }: { jobs: ReviewItem[]; timeZone: string }) {
+export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: ReviewItem[]; timeZone: string; publishers: { id: string; label: string; expectedUsername: string | null; verifiedAt: Date | null }[]; reviewers: { previewEnabled: boolean } }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [compressing, setCompressing] = useState(false);
+  const [previewVisible, setPreviewVisible] = useState(reviewers.previewEnabled);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const selected = jobs.find((job) => job.id === selectedId);
@@ -61,6 +62,8 @@ export function ReviewList({ jobs, timeZone }: { jobs: ReviewItem[]; timeZone: s
     if (selected && !dialog.open) dialog.showModal();
     if (!selected && dialog.open) dialog.close();
   }, [selected]);
+
+  useEffect(() => setPreviewVisible(reviewers.previewEnabled), [reviewers.previewEnabled]);
 
   const close = () => {
     if (compressing) return;
@@ -81,7 +84,10 @@ export function ReviewList({ jobs, timeZone }: { jobs: ReviewItem[]; timeZone: s
         <header className="sticky top-0 z-10 -mx-5 -mt-5 flex min-w-0 flex-wrap items-start justify-between gap-4 border-b border-line bg-surface px-5 py-5 sm:-mx-8 sm:-mt-8 sm:px-8 lg:-mx-10 lg:-mt-10 lg:px-10"><div className="min-w-0"><p className="eyebrow">Review item</p><h2 id={titleId} className="m-0 mt-1 [overflow-wrap:anywhere] text-3xl sm:text-5xl">@{selected.sourcePost.username}</h2></div><button className="small-button shrink-0" type="button" aria-label="Close review" disabled={compressing} onClick={close}>Close</button></header>
         <div className="grid min-w-0 gap-8 pt-7 lg:grid-cols-[minmax(0,.85fr)_minmax(0,1.15fr)] lg:gap-14">
           <aside className="min-w-0">
-            <video className="block w-full bg-black" controls preload="metadata" aria-label={`Video to review from @${selected.sourcePost.username}`} src={`/media/${selected.sourcePost.platformPostId}`} />
+            {previewVisible ? <>
+              <video className="block w-full bg-black" controls preload="metadata" aria-label={`Video to review from @${selected.sourcePost.username}`} src={`/media/${selected.sourcePost.platformPostId}`} />
+              <button className="small-button mt-2" type="button" onClick={() => setPreviewVisible(false)}>Hide video preview</button>
+            </> : <button className="small-button" type="button" onClick={() => setPreviewVisible(true)}>Show video preview</button>}
             <div className="flex flex-wrap items-center gap-2 py-3 text-xs text-muted"><Badge value={selected.status} /><span>{(selected.mediaAsset.fileSize / 1_000_000).toFixed(1)} MB</span><span>{selected.mediaAsset.durationSeconds.toFixed(1)}s</span><span>{selected.mediaAsset.width}x{selected.mediaAsset.height}</span></div>
             <a className="text-link" href={selected.sourcePost.sourceUrl} target="_blank" rel="noreferrer">Open original X post</a>
             <p className="form-note">Collected from {selected.sourcePost.discoveryKind === "BOOKMARK" ? "collector bookmarks" : "source profile"}.</p>
@@ -93,6 +99,7 @@ export function ReviewList({ jobs, timeZone }: { jobs: ReviewItem[]; timeZone: s
               <label className="grid gap-2 text-xs font-semibold text-muted">Caption<textarea className="min-h-32 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="caption" defaultValue={selected.caption} maxLength={280} required disabled={compressing} /></label>
               <label className="grid gap-2 text-xs font-semibold text-muted">Internal notes<textarea className="min-h-24 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="reviewNotes" defaultValue={selected.sourcePost.reviewNotes ?? ""} maxLength={2000} disabled={compressing} /></label>
               <label className="grid gap-2 text-xs font-semibold text-muted">Tags<input className="w-full rounded-sm border border-line bg-surface px-3 py-2 text-sm text-ink" name="internalTags" defaultValue={selected.sourcePost.internalTags ?? ""} maxLength={500} disabled={compressing} /></label>
+              <fieldset className="publisher-targets"><legend>Publish to</legend>{publishers.map((publisher) => <label key={publisher.id}><input type="checkbox" name="publisherIdentityId" value={publisher.id} disabled={compressing} /><span>{publisher.label} (@{publisher.expectedUsername}){publisher.verifiedAt ? "" : " · needs verification"}</span></label>)}</fieldset>
               <div><span className="mb-2 block text-xs font-semibold text-muted">Schedule (optional)</span><ScheduleField value={selected.scheduledFor} timeZone={timeZone} optional /></div>
               <ReviewSaveButtons locked={compressing} />
             </form>

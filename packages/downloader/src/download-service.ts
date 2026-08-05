@@ -40,7 +40,7 @@ export class DownloadService {
     try {
       const recoveringFinal = await this.files.exists(paths.finalVideo);
       const validationPath = recoveringFinal ? paths.finalVideo : paths.temporaryVideo;
-      if (!recoveringFinal) await this.ytdlp.download(job.sourcePost.sourceUrl, paths.temporaryVideo, paths.temporaryThumbnail);
+      if (!recoveringFinal) await this.ytdlp.download(job.sourcePost.sourceUrl, paths.temporaryVideo, paths.temporaryThumbnail, job.collectorIdentityId);
       const fileSize = await this.files.fileSize(validationPath);
       const metadata = await this.ffprobe.inspect(validationPath);
       const checksum = await this.files.checksum(validationPath);

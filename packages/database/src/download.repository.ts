@@ -4,6 +4,7 @@ import { withDatabaseRetry } from "./retry";
 export type ClaimedDownloadJob = {
   id: string;
   attemptCount: number;
+  collectorIdentityId: string | null;
   sourcePost: { id: string; platformPostId: string; sourceUrl: string };
 };
 

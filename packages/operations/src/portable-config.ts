@@ -59,7 +59,10 @@ export class PortableConfigService {
     const settings = Object.entries(manifest.settings).filter((entry): entry is [string, string] => entry[1] !== undefined);
     await this.client.$transaction(async (transaction) => {
       for (const [key, value] of settings) await transaction.appSetting.upsert({ where: { key }, create: { key, value }, update: { value } });
-      await transaction.appSetting.deleteMany({ where: { key: { in: ["COLLECTOR_BROWSER_SESSION_VERIFIED_AT", "PUBLISHER_BROWSER_SESSION_VERIFIED_AT"] } } });
+      await transaction.appSetting.deleteMany({ where: { key: { in: [
+        "COLLECTOR_BROWSER_SESSION_VERIFIED_AT", "COLLECTOR_BROWSER_SESSION_ACCOUNT", "COLLECTOR_BROWSER_SESSION_BINDING", "COLLECTOR_BROWSER_SESSION_ERROR",
+        "PUBLISHER_BROWSER_SESSION_VERIFIED_AT", "PUBLISHER_BROWSER_SESSION_ACCOUNT", "PUBLISHER_BROWSER_SESSION_BINDING", "PUBLISHER_BROWSER_SESSION_ERROR",
+      ] } } });
       for (const source of manifest.sources) {
         await transaction.sourceAccount.upsert({
           where: { username: source.username },

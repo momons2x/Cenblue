@@ -10,6 +10,7 @@ export { DownloadRepository, type ClaimedDownloadJob, type MediaAssetInput } fro
 export { PublishRepository, type ClaimedPublishJob, type PublishedResult } from "./publish.repository";
 export { SchedulerRepository, type ReviewCaptionResolver, type ReviewCaptionSource, type SchedulerLease } from "./scheduler.repository";
 export { SettingsRepository } from "./settings.repository";
+export { BrowserIdentityRepository, identityFingerprint, identityLeaseName, type IdentityRole } from "./browser-identity.repository";
 export { CollectionRunRepository } from "./collection-run.repository";
 export { RuntimeStatusRepository } from "./runtime-status.repository";
 export { isTransientDatabaseError, withDatabaseRetry } from "./retry";
