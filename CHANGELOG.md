@@ -16,18 +16,24 @@ The project intends to follow semantic versioning once release automation is est
 - Browser-bound session verification that records the authenticated X account and invalidates stale verification after binding changes.
 - Compact Review cards with an accessible modal for caption drafts, scheduling, approval, and queue actions, plus a configurable video preview hidden by default.
 - Optional per-video FFmpeg compression during Review. Validated H.264/AAC output replaces the active file only when smaller.
-- A guided `pnpm setup` workflow for local configuration, storage creation, migrations, media-tool detection, and optional Edge session setup.
+- A guided `pnpm setup` workflow for local configuration, storage creation, migrations, media-tool detection, and dashboard-managed identity guidance.
 - Versioned `config:export` and `config:import` commands for portable preferences and managed source rules.
 - Expandable overflow-safe captions on Review and Overview, responsive Tailwind layouts, and semantic light/dark color tokens.
 - Native date and time schedule inputs using `APP_TIMEZONE`, past-due auto-publish warnings on the Queue, and atomic bulk approval.
 - Responsive Published cards with expandable captions, media details, performance metrics, and recovery actions.
 - An in-modal compression activity bar that locks conflicting Review controls while FFmpeg is running.
+- Download claim fencing with per-claim tokens and heartbeats, so long downloads are not reclaimed as stale and results are persisted only by the current claim holder.
+- A `/api/health` endpoint reporting the application version, timezone, database and storage availability, and pending work counts.
+- Worker runtime heartbeats from the collector, downloader, publisher, and pipeline CLIs, shown live on the Overview page, with the application version in the sidebar footer.
+- Automatic pre-migration database snapshots from `pnpm db:migrate`.
+- Test coverage reporting with baseline thresholds via `pnpm test:coverage`.
 
 ### Changed
 
 - Playwright and authenticated `yt-dlp` launches now follow the selected Chromium browser instead of assuming Microsoft Edge globally.
 - Unscheduled approvals are manual-only across dashboard and pipeline workers.
 - Confirmation controls use non-blocking React state instead of browser disclosure behavior.
+- `pnpm setup` no longer guides legacy browser sessions; identities and X logins are configured from the dashboard under **Settings → Isolated X identities**.
 
 ### Security
 

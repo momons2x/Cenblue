@@ -10,13 +10,14 @@ Keep `PUBLISH_MODE=ASSISTED` until the publisher session, captions, review flow,
 
 - Confirm collector and publisher sessions after account challenges or profile changes.
 - Review Queue failures, `MANUAL_ATTENTION`, and amber past-due warnings before retrying.
+- Check the Overview **Local runtime** panel for worker status and last errors from the CLI workers' heartbeats.
 - Monitor free disk space and `storage/logs`.
 - Run `pnpm storage:audit` after moving media or restoring a database.
-- Create snapshots with `pnpm db:backup` before migrations and significant maintenance.
+- Create snapshots with `pnpm db:backup` before significant maintenance. `pnpm db:migrate` snapshots an existing database automatically before applying migrations.
 
 ## New Device Setup
 
-Run `pnpm setup` after installing dependencies. The wizard detects or requests `yt-dlp`, FFmpeg, and FFprobe, creates local storage, writes the ignored `.env`, applies migrations, and can guide fresh Edge sessions. Collector and publisher browser identities must remain separate.
+Run `pnpm setup` after installing dependencies. The wizard detects or requests `yt-dlp`, FFmpeg, and FFprobe, creates local storage, writes the ignored `.env`, and applies migrations. It no longer guides browser sessions; Collector and Publisher identities and their X logins are configured from the dashboard under **Settings → Isolated X identities**. Collector and publisher browser identities must remain separate.
 
 Move non-secret preferences and managed sources with:
 

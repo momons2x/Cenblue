@@ -37,7 +37,7 @@ pnpm install --frozen-lockfile
 pnpm setup
 ```
 
-The guided setup detects the repository and media binaries, creates runtime storage, writes the ignored local `.env`, applies database migrations, and can walk through fresh collector and publisher sessions. Manual `.env` setup remains available through `.env.example`.
+The guided setup detects the repository and media binaries, creates runtime storage, writes the ignored local `.env`, and applies database migrations. Add Collector and Publisher identities and log into X from the dashboard under **Settings → Isolated X identities**. Manual `.env` setup remains available through `.env.example`.
 
 ## Storage Setup
 
@@ -184,6 +184,8 @@ Review uses responsive compact cards for size, duration, and caption scanning. L
 
 The **Compose** page publishes original text or one image through one or more explicitly selected Publisher identities without creating a video pipeline job.
 
+The **Overview** page shows live status for the CLI workers (collector, downloader, publisher, pipeline) from their runtime heartbeats. The dashboard exposes a minimal health endpoint at `/api/health` returning the application version, timezone, database and storage availability, and pending work counts; the application version also appears in the sidebar footer.
+
 ## Scheduled Publishing
 
 Automatic scheduled publishing requires all of the following:
@@ -215,7 +217,7 @@ Published history uses responsive cards with expandable captions, media details,
 | `pnpm publisher` | Process one eligible publication |
 | `pnpm pipeline:once` | Run one complete pipeline cycle |
 | `pnpm pipeline` | Run the recurring pipeline |
-| `pnpm db:migrate` | Apply SQLite migrations |
+| `pnpm db:migrate` | Back up the existing database, then apply SQLite migrations |
 | `pnpm db:studio` | Open Prisma Studio |
 | `pnpm db:backup` | Create a database-only snapshot |
 | `pnpm storage:audit` | Verify local media paths, sizes, and checksums |
@@ -229,17 +231,20 @@ pnpm db:backup
 
 This runs SQLite `VACUUM INTO` and creates `storage/backups/cenblu-<timestamp>.db`. It does not include videos, thumbnails, logs, or browser profiles. Copy important snapshots outside the project directory to protect against accidental project-folder deletion.
 
+`pnpm db:migrate` also snapshots an existing database before applying migrations, so a failed or unexpected migration can be rolled back from `storage/backups/`. Fresh installs with no existing database skip the snapshot and migrate directly.
+
 ## Quality Checks
 
 ```powershell
 pnpm lint
 pnpm typecheck
 pnpm test
+pnpm test:coverage
 pnpm build
 pnpm dashboard:routes:smoke
 ```
 
-Tests use separate databases under `storage/temp`; never point test commands at a real Cenblue database.
+Tests use separate databases under `storage/temp`; never point test commands at a real Cenblue database. `pnpm test:coverage` enforces baseline coverage thresholds in CI.
 
 ## Troubleshooting
 
@@ -271,8 +276,8 @@ Run `yt-dlp --version`, `ffmpeg -version`, and `ffprobe -version`, or configure 
 
 | Directory | Responsibility |
 | --- | --- |
-| `apps/dashboard` | Next.js dashboard, Server Actions, APIs, and automatic publisher loop |
-| `workers` | Collector, downloader, publisher, pipeline, and maintenance CLIs |
+| `apps/dashboard` | Next.js dashboard, Server Actions, APIs, automatic publisher loop, and `/api/health` |
+| `workers` | Collector, downloader, publisher, pipeline, maintenance, setup, and migration CLIs |
 | `packages/config` | Environment validation and protected path resolution |
 | `packages/database` | Prisma repositories, leases, settings, and SQLite migrations |
 | `packages/collector` | X collection and normalization |

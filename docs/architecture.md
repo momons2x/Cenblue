@@ -4,9 +4,11 @@ Cenblue is a pnpm TypeScript monorepo built around a local SQLite database and f
 
 The normal data flow is `BrowserIdentity(COLLECTOR)` → assigned `SourceAccount` → `SourcePost` → `DownloadJob` → `MediaAsset` → review job → account-scoped `PublishJob` targets → `PublishedPost`. Repository methods own lifecycle transitions and use transactions where multiple records must remain synchronized.
 
-The collector and publisher each receive a separate Playwright persistent profile protected by database-backed leases. Download and publish jobs use explicit claim states, retry timing, and stale-work recovery. Uncertain publication results require manual attention rather than blind retries.
+The collector and publisher each receive a separate Playwright persistent profile protected by database-backed leases. Download and publish jobs use explicit claim states, retry timing, and stale-work recovery. Downloads and publications carry a per-claim token and a heartbeat; stale recovery keys off the heartbeat rather than the start time, and completion or failure is accepted only with the current claim token. Uncertain publication results require manual attention rather than blind retries.
 
-The dashboard provides operator workflows through Next.js Server Actions. Dedicated workers expose the same services for one-off or recurring operation. SQLite and repository-local media are suitable for one trusted machine; they are not a distributed queue or storage system.
+The dashboard provides operator workflows through Next.js Server Actions. Dedicated workers expose the same services for one-off or recurring operation. SQLite and repository-local media are suitable for one trusted machine; they are not a distributed queue or storage system. Worker health is observable: the CLI workers write runtime status heartbeats that the Overview page renders, and `/api/health` reports the application version, timezone, database and storage availability, and pending work counts.
+
+Database migrations run through a worker that snapshots an existing database before applying pending migrations, so an unexpected migration can be rolled back; fresh databases skip the snapshot.
 
 Review is split across a server-rendered queue and a client-side card/dialog interface. Caption, schedule, and lifecycle mutations remain Server Actions so repository and state validation stay authoritative. Manual compression creates a temporary FFmpeg candidate, validates its metadata and hashes, moves it into video storage, conditionally switches the `MediaAsset` record, and removes the old file only after that switch succeeds.
 

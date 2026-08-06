@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with the dashboard Logs page and the component logs under `storage/logs`.
+Start with the dashboard Logs page, the component logs under `storage/logs`, and the worker status shown on the Overview page. `/api/health` reports the version, timezone, database and storage availability, and pending work counts in one request.
 
 ## Browser Failures
 
@@ -32,4 +32,4 @@ If Review compression fails, confirm that FFmpeg and FFprobe execute from the co
 
 ## Setup And Import Failures
 
-`pnpm setup` preserves the replaced environment as `.env.previous`. If setup is interrupted, inspect both files before retrying. Portable imports accept only the documented versioned schema; remove machine paths, session fields, media references, and unknown keys rather than bypassing validation. After every import, establish fresh browser sessions and rerun both session checks.
+`pnpm setup` preserves the replaced environment as `.env.previous`. If setup is interrupted, inspect both files before retrying. The wizard no longer guides browser sessions; add and verify Collector and Publisher identities from **Settings → Isolated X identities** after it finishes. Portable imports accept only the documented versioned schema; remove machine paths, session fields, media references, and unknown keys rather than bypassing validation. After every import, establish fresh browser sessions and rerun both session checks.

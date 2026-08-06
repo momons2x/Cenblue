@@ -66,10 +66,10 @@ Core principles:
 - [ ] Separate user-friendly messages from internal diagnostic details.
 - [ ] Add an operation or correlation ID to jobs, logs, and UI errors.
 - [ ] Replace silent dashboard loggers with the shared structured logger.
-- [ ] Add worker heartbeat and last-success information.
+- [x] Add worker heartbeat and last-success information.
 - [ ] Add visible states such as `RETRYING`, `BLOCKED`, `SESSION_EXPIRED`, and `MANUAL_ATTENTION`.
-- [ ] Add health and readiness endpoints.
-- [ ] Report database, storage, browser, binary, and worker health.
+- [x] Add health and readiness endpoints.
+- [x] Report database, storage, browser, binary, and worker health.
 - [ ] Stop placing raw internal error messages in redirect URLs.
 - [ ] Add warnings for repeated failures.
 
@@ -136,7 +136,7 @@ Core principles:
 - [ ] Add indexes for checksum and duplicate-detection queries.
 - [ ] Review read-before-create operations for race conditions.
 - [ ] Make inserts and scheduling explicitly idempotent.
-- [ ] Automatically back up the database before migrations.
+- [x] Automatically back up the database before migrations.
 - [ ] Add backup retention and restore verification.
 - [ ] Document failed migration and rollback procedures.
 
@@ -152,7 +152,7 @@ Core principles:
 **Goal:** Make installations and upgrades reproducible.
 
 - [ ] Add a Cenblue application version.
-- [ ] Show the version in logs, the dashboard, and health responses.
+- [x] Show the version in logs, the dashboard, and health responses.
 - [x] Pin the supported Node.js version.
 - [x] Replace dependency `latest` ranges with controlled versions.
 - [x] Define a dependency update policy.
