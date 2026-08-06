@@ -18,6 +18,7 @@
     "lint": "eslint apps packages workers tests vitest.config.ts",
     "typecheck": "tsc --noEmit && pnpm --filter @cenblu/dashboard typecheck",
     "test": "cross-env DATABASE_URL=file:../../../storage/temp/cenblu-test.db prisma migrate deploy --schema packages/database/prisma/schema.prisma && cross-env DATABASE_URL=file:../../../storage/temp/cenblu-test.db vitest run",
+    "test:coverage": "cross-env DATABASE_URL=file:../../../storage/temp/cenblu-test.db prisma migrate deploy --schema packages/database/prisma/schema.prisma && cross-env DATABASE_URL=file:../../../storage/temp/cenblu-test.db vitest run --coverage",
     "collector": "tsx workers/collector.worker.ts",
     "collector:session-check": "tsx workers/collector.worker.ts --session-check",
     "collector:profile:open": "tsx workers/collector.worker.ts --profile-open",
@@ -43,7 +44,7 @@
     "config:export": "tsx workers/config.worker.ts export",
     "config:import": "tsx workers/config.worker.ts import",
     "hardening:smoke": "cross-env DATABASE_URL=file:../../../storage/temp/cenblu-hardening-smoke.db prisma migrate deploy --schema packages/database/prisma/schema.prisma && cross-env DATABASE_URL=file:../../../storage/temp/cenblu-hardening-smoke.db tsx tests/hardening.smoke.ts",
-    "db:migrate": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
+    "db:migrate": "tsx workers/migrate.worker.ts",
     "db:studio": "prisma studio --schema packages/database/prisma/schema.prisma"
   },
   "dependencies": {
@@ -72,6 +73,7 @@
     "tsx": "4.23.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.0.0",
-    "vitest": "4.1.10"
+    "vitest": "4.1.10",
+    "@vitest/coverage-v8": "4.1.10"
   }
 }

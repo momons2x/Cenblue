@@ -58,9 +58,6 @@ async function main(): Promise<void> {
       "DATABASE_URL=\"file:../../../storage/cenblu.db\"",
       `APP_TIMEZONE=${quote(timezone)}`,
       "PLAYWRIGHT_HEADLESS=false",
-      "PLAYWRIGHT_PROFILE_PATH=\"./storage/browser-profile-collector\"",
-      "PLAYWRIGHT_PROFILE_DIRECTORY=\"Default\"",
-      "PUBLISHER_PROFILE_PATH=\"./storage/browser-profile-publisher\"",
       `PLAYWRIGHT_BROWSER_CHANNEL=${quote(browser)}`,
       "PLAYWRIGHT_ALLOW_EXTERNAL_PROFILE=false",
       `YTDLP_BINARY=${quote(binaries["yt-dlp"])}`,
@@ -85,17 +82,8 @@ async function main(): Promise<void> {
     const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
     await run(pnpm, ["db:migrate"]);
     console.log("Local configuration, storage, and database are ready.");
-    const login = browser === "msedge" ? (await terminal.question("Configure fresh collector and publisher X sessions now? [y/N] ")).trim().toLowerCase() : "no";
-    if (login === "y" || login === "yes") {
-      console.log("The collector profile will open. Log into X, then close Edge completely before returning here.");
-      await run(pnpm, ["collector:profile:open"]);
-      await terminal.question("Press Enter after closing the collector browser...");
-      await run(pnpm, ["collector:session-check"]);
-      console.log("A separate publisher browser will open. Complete its login flow when prompted.");
-      await run(pnpm, ["publisher:login"]);
-      await run(pnpm, ["publisher:session-check"]);
-    }
-    if (browser === "chrome") console.log("Guided browser-session setup currently supports Edge only. Configure the Chrome sessions separately before collecting or publishing.");
+    console.log("Add Collector and Publisher identities and log into X from the dashboard:");
+    console.log("  Settings → Isolated X identities");
     console.log("Setup complete. Start Cenblue with: pnpm dev");
   } finally {
     terminal.close();
