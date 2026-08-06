@@ -52,6 +52,7 @@
     "@cenblu/config": "workspace:*",
     "@cenblu/database": "workspace:*",
     "@cenblu/downloader": "workspace:*",
+    "@cenblu/notifications": "workspace:*",
     "@cenblu/operations": "workspace:*",
     "@cenblu/publisher": "workspace:*",
     "@cenblu/scheduler": "workspace:*",

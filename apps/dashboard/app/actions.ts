@@ -8,9 +8,10 @@ import { basename, relative, resolve } from "node:path";
 import { z } from "zod";
 import { CollectionService, PlaywrightTimelineBrowser, XPlaywrightCollector } from "@cenblu/collector";
 import { applyStoredSettings, browserBindingFingerprint, browserIds, loadConfig } from "@cenblu/config";
-import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
+import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, NotificationOutboxRepository, OperationalEventRepository, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
+import { NotificationEmitter } from "@cenblu/notifications";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
 import { discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChromiumProfile, PublishService, resolveCaption, validateCaption, validateChromiumExecutable, XPlaywrightPublisher } from "@cenblu/publisher";
 import { combineExclusiveLeases, ResourceBusyError } from "@cenblu/shared/lease";
@@ -416,6 +417,19 @@ async function dashboardDownloader() {
   };
 }
 
+async function buildNotificationEmitter(config: ReturnType<typeof applyStoredSettings>) {
+  const settings = await new SettingsRepository(prisma).getAll();
+  if (config.telegramBotToken && settings.NOTIFICATIONS_ENABLED === "true" && settings.TELEGRAM_CHAT_ID) {
+    return new NotificationEmitter(
+      new OperationalEventRepository(prisma),
+      new NotificationOutboxRepository(prisma),
+      undefined,
+      async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null,
+    );
+  }
+  return null;
+}
+
 async function dashboardPublisher(publisherIdentityId: string) {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   const identity = await prisma.browserIdentity.findFirst({ where: { id: publisherIdentityId, role: "PUBLISHER", enabled: true } });
@@ -424,6 +438,7 @@ async function dashboardPublisher(publisherIdentityId: string) {
   const repository = new PublishRepository(prisma);
   const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
   const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+  const emitter = await buildNotificationEmitter(config);
   return new PublishService(
     repository,
     new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, browserLease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername ?? undefined }, logger),
@@ -432,6 +447,10 @@ async function dashboardPublisher(publisherIdentityId: string) {
     config.publishAllowEmptyCaption,
     3,
     identity.id,
+    emitter ? async (failure) => {
+      const stored = await new SettingsRepository(prisma).getAll();
+      await emitter.emitPublishFailure({ jobId: failure.jobId, platformPostId: failure.platformPostId, publisherIdentityId: failure.publisherIdentityId, error: failure.error, attemptCount: failure.attemptCount, manualAttention: failure.manualAttention, retryable: failure.retryable }, { enabled: stored.NOTIFICATIONS_ENABLED === "true" && Boolean(config.telegramBotToken), chatId: stored.TELEGRAM_CHAT_ID ?? null });
+    } : undefined,
   );
 }
 
@@ -873,6 +892,29 @@ export async function saveReviewSettings(formData: FormData) {
   await new SettingsRepository(prisma).setMany({ REVIEW_VIDEO_PREVIEW_ENABLED: z.enum(["true", "false"]).parse(formData.get("videoPreviewEnabled")) });
   refresh("/settings", "/review");
   redirect("/settings?reviewSaved=1");
+}
+
+export async function saveNotificationSettings(formData: FormData) {
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const enabled = z.enum(["true", "false"]).parse(formData.get("notificationsEnabled"));
+  const chatId = z.string().trim().min(1, "Enter the Telegram chat ID.").parse(formData.get("telegramChatId"));
+  if (enabled === "true" && !config.telegramBotToken) throw new Error("Add TELEGRAM_BOT_TOKEN to .env before enabling notifications.");
+  await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_ENABLED: enabled, TELEGRAM_CHAT_ID: chatId });
+  refresh("/settings");
+  redirect("/settings?notificationsSaved=1");
+}
+
+export async function sendTestNotification() {
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const stored = await new SettingsRepository(prisma).getAll();
+  if (!config.telegramBotToken) throw new Error("Add TELEGRAM_BOT_TOKEN to .env to send a test message.");
+  if (stored.NOTIFICATIONS_ENABLED !== "true") throw new Error("Enable notifications before sending a test message.");
+  const chatId = stored.TELEGRAM_CHAT_ID;
+  if (!chatId) throw new Error("Set the Telegram chat ID before sending a test message.");
+  const emitter = new NotificationEmitter(new OperationalEventRepository(prisma), new NotificationOutboxRepository(prisma));
+  await emitter.sendTestMessage({ enabled: true, chatId });
+  refresh("/settings");
+  redirect("/settings?notificationTest=queued");
 }
 
 export async function publishManualPost(formData: FormData) {

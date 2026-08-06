@@ -14,6 +14,7 @@
     "@cenblu/config": "workspace:*",
     "@cenblu/database": "workspace:*",
     "@cenblu/downloader": "workspace:*",
+    "@cenblu/notifications": "workspace:*",
     "@cenblu/operations": "workspace:*",
     "@js-temporal/polyfill": "0.5.1",
     "next": "16.2.11",

@@ -36,6 +36,7 @@ const environmentSchema = z.object({
   PUBLISHER_BROWSER_EXECUTABLE: z.string().min(1).optional(),
   PLAYWRIGHT_ALLOW_EXTERNAL_PROFILE: booleanFromEnvironment.default(false),
   SOURCE_ACCOUNT_LIMIT: z.coerce.number().int().min(1).max(100).default(3),
+  TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
   POSTS_PER_SOURCE: z.coerce.number().int().min(1).default(5),
   VIDEO_ONLY: booleanFromEnvironment.default(true),
   LOG_STORAGE_PATH: z.string().min(1).default("./storage/logs"),
@@ -81,6 +82,7 @@ export type AppConfig = {
   publisherBrowserExecutablePath: string | undefined;
   playwrightAllowExternalProfile: boolean;
   sourceAccountLimit: number;
+  telegramBotToken: string | undefined;
   postsPerSource: number;
   videoOnly: boolean;
   logStoragePath: string;
@@ -150,6 +152,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     publisherBrowserExecutablePath: parsed.PUBLISHER_BROWSER_EXECUTABLE ? resolve(parsed.PUBLISHER_BROWSER_EXECUTABLE) : undefined,
     playwrightAllowExternalProfile: parsed.PLAYWRIGHT_ALLOW_EXTERNAL_PROFILE,
     sourceAccountLimit: parsed.SOURCE_ACCOUNT_LIMIT,
+    telegramBotToken: parsed.TELEGRAM_BOT_TOKEN,
     postsPerSource: parsed.POSTS_PER_SOURCE,
     videoOnly: parsed.VIDEO_ONLY,
     logStoragePath: localPath(repositoryRoot, parsed.LOG_STORAGE_PATH, "LOG_STORAGE_PATH"),
@@ -207,6 +210,7 @@ export function applyStoredSettings(config: AppConfig, settings: Record<string, 
     YTDLP_BINARY: config.ytDlpBinary,
     FFMPEG_BINARY: config.ffmpegBinary,
     FFPROBE_BINARY: config.ffprobeBinary,
+    ...(config.telegramBotToken ? { TELEGRAM_BOT_TOKEN: config.telegramBotToken } : {}),
     ...allowedSettings,
   };
   if (collectorBrowserId) {

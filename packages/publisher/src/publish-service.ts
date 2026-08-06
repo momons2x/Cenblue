@@ -4,6 +4,16 @@ import { validateCaption } from "./caption";
 import type { PublishMediaVerifier } from "./media-verifier";
 import { PublisherError, type Publisher } from "./types";
 
+export type PublishFailureNotification = {
+  jobId: string;
+  platformPostId: string;
+  publisherIdentityId: string | null;
+  error: string;
+  attemptCount: number;
+  manualAttention: boolean;
+  retryable: boolean;
+};
+
 export class PublishService {
   constructor(
     private readonly repository: PublishRepository,
@@ -13,6 +23,7 @@ export class PublishService {
     private readonly allowEmptyCaption: boolean,
     private readonly maxAttempts = 3,
     private readonly publisherIdentityId?: string,
+    private readonly onPublishFailure?: (failure: PublishFailureNotification) => Promise<void> | void,
   ) {}
 
   async processNext(): Promise<boolean> {
@@ -87,6 +98,11 @@ export class PublishService {
       const persisted = await this.repository.fail(job.id, claimToken, `${publisherError.kind}: ${publisherError.message}`, nextAttemptAt, manualAttention);
       if (!persisted) this.logger.warn({ operation: "publisher.claim.lost", jobId: job.id, postId: job.sourcePost.platformPostId, failure: publisherError.kind }, "Publish result was not persisted because the claim is no longer current");
       this.logger.error({ operation: "publisher.failed", jobId: job.id, postId: job.sourcePost.platformPostId, attemptCount: job.attemptCount, failure: publisherError.kind, retryable: nextAttemptAt !== null, nextAttemptAt: nextAttemptAt?.toISOString() ?? null, manualIntervention: manualAttention }, "Publish failed");
+      try {
+        await this.onPublishFailure?.({ jobId: job.id, platformPostId: job.sourcePost.platformPostId, publisherIdentityId: this.publisherIdentityId ?? null, error: `${publisherError.kind}: ${publisherError.message}`, attemptCount: job.attemptCount, manualAttention, retryable: nextAttemptAt !== null });
+      } catch (notificationError) {
+        this.logger.warn({ operation: "publisher.notification.failed", jobId: job.id, error: notificationError instanceof Error ? notificationError.message : String(notificationError) }, "Publish failure notification could not be emitted");
+      }
     } finally {
       clearInterval(heartbeatTimer);
     }

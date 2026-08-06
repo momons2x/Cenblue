@@ -27,6 +27,7 @@ The project intends to follow semantic versioning once release automation is est
 - Worker runtime heartbeats from the collector, downloader, publisher, and pipeline CLIs, shown live on the Overview page, with the application version in the sidebar footer.
 - Automatic pre-migration database snapshots from `pnpm db:migrate`.
 - Test coverage reporting with baseline thresholds via `pnpm test:coverage`.
+- Telegram notifications for publish failures that need attention, with deduplication, retry backoff, an outbox driven by the dashboard loop, and a test-message action in Settings.
 
 ### Changed
 

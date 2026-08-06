@@ -198,6 +198,37 @@ model SchedulerLock {
   updatedAt   DateTime @updatedAt
 }
 
+model OperationalEvent {
+  id          String    @id @default(cuid())
+  type        String
+  severity    String
+  component   String
+  message     String
+  meta        String?
+  dedupeKey   String?
+  dedupeUntil DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([severity, createdAt])
+  @@index([dedupeKey])
+}
+
+model NotificationOutbox {
+  id           String    @id @default(cuid())
+  channel      String
+  recipient    String
+  text         String
+  status       String    @default("PENDING")
+  attemptCount Int       @default(0)
+  claimToken   String?
+  nextAttemptAt DateTime?
+  lastError    String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([status, nextAttemptAt])
+}
+
 model AppSetting {
   key       String   @id
   value     String

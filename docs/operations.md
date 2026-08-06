@@ -10,6 +10,7 @@ Keep `PUBLISH_MODE=ASSISTED` until the publisher session, captions, review flow,
 
 - Confirm collector and publisher sessions after account challenges or profile changes.
 - Review Queue failures, `MANUAL_ATTENTION`, and amber past-due warnings before retrying.
+- If notifications are enabled, check that Telegram delivery still works after bot or chat changes, and confirm the `TELEGRAM_BOT_TOKEN` in `.env` is still valid.
 - Check the Overview **Local runtime** panel for worker status and last errors from the CLI workers' heartbeats.
 - Confirm `yt-dlp`, `ffmpeg`, and `ffprobe` still exist at their configured `.env` paths, especially after a WinGet upgrade or cleanup. Prefer PATH-based values (`yt-dlp`, `ffmpeg`, `ffprobe`) so tool updates do not leave stale absolute paths.
 - Monitor free disk space and `storage/logs`.

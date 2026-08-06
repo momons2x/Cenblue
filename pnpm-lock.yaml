@@ -20,6 +20,9 @@ importers:
       '@cenblu/downloader':
         specifier: workspace:*
         version: link:packages/downloader
+      '@cenblu/notifications':
+        specifier: workspace:*
+        version: link:packages/notifications
       '@cenblu/operations':
         specifier: workspace:*
         version: link:packages/operations
@@ -99,6 +102,9 @@ importers:
       '@cenblu/downloader':
         specifier: workspace:*
         version: link:../../packages/downloader
+      '@cenblu/notifications':
+        specifier: workspace:*
+        version: link:../../packages/notifications
       '@cenblu/operations':
         specifier: workspace:*
         version: link:../../packages/operations
@@ -191,6 +197,12 @@ importers:
       zod:
         specifier: 4.4.3
         version: 4.4.3
+
+  packages/notifications:
+    dependencies:
+      '@cenblu/database':
+        specifier: workspace:*
+        version: link:../database
 
   packages/operations:
     dependencies:

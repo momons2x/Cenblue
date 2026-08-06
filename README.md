@@ -205,6 +205,16 @@ All schedule controls use the configured `APP_TIMEZONE` with native date and tim
 
 Published history uses responsive cards with expandable captions, media details, performance metrics, and recovery actions.
 
+## Notifications
+
+Cenblue can send Telegram alerts when a publish job fails and needs attention. Setup:
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
+2. Set `TELEGRAM_BOT_TOKEN` in the local `.env` and restart the dashboard. The token never enters the database or portable exports.
+3. Under **Settings → Notifications**, enable alerts and set your Telegram chat ID (the number in a chat link such as `t.me/<user>` or via `@userinfobot`). Use **Send test message** to verify delivery.
+
+Enabled alerts notify on publish failures, marking whether the job waits for manual review or will retry automatically. Repeated failures for the same job are deduplicated, and delivery is retried with backoff. The dashboard checks the outbox every 15 seconds, so notifications follow the dashboard process; keep it running to deliver alerts.
+
 ## Commands
 
 | Command | Purpose |

@@ -229,23 +229,23 @@ Core principles:
 **Goal:** Deliver useful Telegram and Discord alerts without making external messaging part of job correctness.
 
 - [ ] Define stable error codes, sanitized operator messages, severity, fingerprints, and correlation IDs.
-- [ ] Add durable `OperationalEvent`, `NotificationChannel`, and `NotificationOutbox` models.
+- [x] Add durable `OperationalEvent`, `NotificationChannel`, and `NotificationOutbox` models.
 - [ ] Insert operational events transactionally with authoritative job state changes where possible.
-- [ ] Add a claim-token-fenced notification dispatcher with stale-claim recovery.
-- [ ] Implement Telegram Bot API delivery with chat validation and `retry_after` handling.
+- [x] Add a claim-token-fenced notification dispatcher with stale-claim recovery.
+- [x] Implement Telegram Bot API delivery with chat validation and `retry_after` handling.
 - [ ] Implement Discord webhooks as the first Discord transport.
 - [ ] Consider a Discord bot only for commands, acknowledgements, or interactive incident management.
 - [ ] Add minimum severity, component/category filters, quiet hours, and critical-alert bypass.
-- [ ] Deduplicate repeated incidents and aggregate retry storms within a configurable window.
+- [x] Deduplicate repeated incidents and aggregate retry storms within a configurable window.
 - [ ] Notify terminal failures, uncertain publications, session expiry, storage corruption, and worker outages by default.
 - [ ] Suppress ordinary transient retries unless the operator explicitly enables them.
 - [ ] Support optional recovery notifications when incidents resolve.
-- [ ] Add exponential delivery retries with jitter, provider rate-limit handling, and dead-letter state.
-- [ ] Add Settings flows for Connect, Replace secret, Test notification, Disable, and Remove.
+- [x] Add exponential delivery retries with jitter, provider rate-limit handling, and dead-letter state.
+- [x] Add Settings flows for Connect, Replace secret, Test notification, Disable, and Remove.
 - [ ] Show last success, sanitized failure, next retry, queue depth, and delivery history.
 - [ ] Store tokens and webhook URLs in an OS-backed or encrypted secret store with environment fallback.
-- [ ] Exclude notification secrets and sensitive destinations from portable exports, logs, backups where possible, and UI responses.
-- [ ] Never attach browser diagnostics, captions, source text, cookies, tokens, stack traces, or profile paths automatically.
+- [x] Exclude notification secrets and sensitive destinations from portable exports, logs, backups where possible, and UI responses.
+- [x] Never attach browser diagnostics, captions, source text, cookies, tokens, stack traces, or profile paths automatically.
 
 **Completion criteria:**
 
