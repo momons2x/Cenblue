@@ -11,6 +11,7 @@ Keep `PUBLISH_MODE=ASSISTED` until the publisher session, captions, review flow,
 - Confirm collector and publisher sessions after account challenges or profile changes.
 - Review Queue failures, `MANUAL_ATTENTION`, and amber past-due warnings before retrying.
 - Check the Overview **Local runtime** panel for worker status and last errors from the CLI workers' heartbeats.
+- Confirm `yt-dlp`, `ffmpeg`, and `ffprobe` still exist at their configured `.env` paths, especially after a WinGet upgrade or cleanup. Prefer PATH-based values (`yt-dlp`, `ffmpeg`, `ffprobe`) so tool updates do not leave stale absolute paths.
 - Monitor free disk space and `storage/logs`.
 - Run `pnpm storage:audit` after moving media or restoring a database.
 - Create snapshots with `pnpm db:backup` before significant maintenance. `pnpm db:migrate` snapshots an existing database automatically before applying migrations.

@@ -272,6 +272,15 @@ Confirm `DATABASE_URL`, then run `pnpm db:migrate`. Never migrate an unexpected 
 
 Run `yt-dlp --version`, `ffmpeg -version`, and `ffprobe -version`, or configure explicit binary paths in `.env`.
 
+If a command reports `spawn ... ENOENT`, the configured binary path no longer exists. This commonly happens when media tools were installed through WinGet and their package cache or `WinGet\Links` shims were cleared, deleted, or moved. Fix it by pointing the `.env` variables at real executable paths:
+
+1. Reinstall any missing tool, for example `winget install --id Gyan.FFmpeg --source winget` and `winget install --id yt-dlp.yt-dlp --source winget`.
+2. Find the installed executables under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\<package>\bin\` (or the package root for `yt-dlp.exe`). The `WinGet\Links` shims may not exist until the shell restarts, so prefer the real package paths.
+3. Set `YTDLP_BINARY`, `FFMPEG_BINARY`, and `FFPROBE_BINARY` in `.env` to those paths, or simply to bare `yt-dlp`, `ffmpeg`, and `ffprobe` if the tools are on `PATH`.
+4. Restart the dashboard so it reloads the environment, then run `pnpm downloader:smoke` to confirm.
+
+Prefer PATH-based values (`yt-dlp`, `ffmpeg`, `ffprobe`) in `.env` so future tool updates or cache cleanups do not leave stale absolute paths behind.
+
 ## Architecture
 
 | Directory | Responsibility |

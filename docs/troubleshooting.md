@@ -28,6 +28,8 @@ Confirm `DATABASE_URL` points to the intended file. A zero-byte database is not 
 
 Verify the external tools, storage paths, free space, and checksums. Run `pnpm storage:audit`; do not manually rewrite database file paths unless the corresponding files have been moved safely.
 
+If a command reports `spawn ... ENOENT`, the configured binary path is missing. This usually means `yt-dlp`, `ffmpeg`, or `ffprobe` was installed through WinGet and its package cache or `WinGet\Links` shims were cleared. Confirm with `yt-dlp --version`, `ffmpeg -version`, and `ffprobe -version`. Reinstall missing tools with `winget install --id Gyan.FFmpeg --source winget` and `winget install --id yt-dlp.yt-dlp --source winget`, then update `YTDLP_BINARY`, `FFMPEG_BINARY`, and `FFPROBE_BINARY` in `.env`. Use the real package paths under `%LOCALAPPDATA%\Microsoft\WinGet\Packages\<package>\bin\`, or bare `yt-dlp`/`ffmpeg`/`ffprobe` when the tools are on `PATH`. Restart the dashboard so it reloads the environment, then run `pnpm downloader:smoke` to confirm.
+
 If Review compression fails, confirm that FFmpeg and FFprobe execute from the configured paths and that both `storage/temp` and `storage/videos` have sufficient free space. The original remains active unless the validated smaller candidate was committed. A "not smaller" result is expected for media that is already efficiently encoded.
 
 ## Setup And Import Failures
