@@ -1,6 +1,6 @@
 import { applyStoredSettings, browserBindingFingerprint, loadConfig } from "@cenblu/config";
 import { CollectionService, PlaywrightTimelineBrowser, XPlaywrightCollector } from "@cenblu/collector";
-import { DatabaseExclusiveLease, identityLeaseName, prisma, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
+import { DatabaseExclusiveLease, identityLeaseName, prisma, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { resolve } from "node:path";
 import { createLogger } from "@cenblu/shared/logger";
 import { discoverInstalledChromiumBrowsers, openChromiumProfile } from "@cenblu/publisher";
@@ -63,8 +63,16 @@ async function main(): Promise<void> {
     config.sourceAccountLimit,
     config.postsPerSource,
   );
-  const result = await service.runOnce();
-  logger.info({ operation: "collector.cycle.complete", ...result }, "Collection cycle completed");
+  const runtime = new RuntimeStatusRepository(prisma);
+  await runtime.update("collector", "RUNNING", "collection");
+  try {
+    const result = await service.runOnce();
+    await runtime.update("collector", "IDLE");
+    logger.info({ operation: "collector.cycle.complete", ...result }, "Collection cycle completed");
+  } catch (error) {
+    await runtime.update("collector", "ERROR", undefined, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
 }
 
 main()

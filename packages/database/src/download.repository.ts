@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { MediaAsset, PrismaClient } from "@prisma/client";
 import { withDatabaseRetry } from "./retry";
 
@@ -5,6 +6,7 @@ export type ClaimedDownloadJob = {
   id: string;
   attemptCount: number;
   collectorIdentityId: string | null;
+  claimToken: string | null;
   sourcePost: { id: string; platformPostId: string; sourceUrl: string };
 };
 
@@ -16,11 +18,11 @@ export class DownloadRepository {
   async claimNext(now: Date, staleBefore: Date): Promise<ClaimedDownloadJob | null> {
     return withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const stale = await transaction.downloadJob.findMany({
-        where: { status: "RUNNING", startedAt: { lt: staleBefore } }, select: { sourcePostId: true },
+        where: { status: "RUNNING", OR: [{ heartbeatAt: { lt: staleBefore } }, { heartbeatAt: null, startedAt: { lt: staleBefore } }] }, select: { sourcePostId: true },
       });
       await transaction.downloadJob.updateMany({
-        where: { status: "RUNNING", startedAt: { lt: staleBefore } },
-        data: { status: "RETRY_WAIT", nextAttemptAt: now, lastError: "Recovered stale download claim", startedAt: null },
+        where: { status: "RUNNING", OR: [{ heartbeatAt: { lt: staleBefore } }, { heartbeatAt: null, startedAt: { lt: staleBefore } }] },
+        data: { status: "RETRY_WAIT", nextAttemptAt: now, lastError: "Recovered stale download claim", startedAt: null, heartbeatAt: null, claimToken: null },
       });
       if (stale.length > 0) await transaction.sourcePost.updateMany({
         where: { id: { in: stale.map((job) => job.sourcePostId) } }, data: { status: "QUEUED_FOR_DOWNLOAD" },
@@ -37,6 +39,7 @@ export class DownloadRepository {
         select: { id: true },
       });
       if (!candidate) return null;
+      const claimToken = randomUUID();
       const claimed = await transaction.downloadJob.updateMany({
         where: {
           id: candidate.id,
@@ -45,7 +48,7 @@ export class DownloadRepository {
             { status: "RETRY_WAIT", nextAttemptAt: { lte: now } },
           ],
         },
-        data: { status: "RUNNING", startedAt: now, attemptCount: { increment: 1 }, nextAttemptAt: null, lastError: null, priority: 0 },
+        data: { status: "RUNNING", startedAt: now, heartbeatAt: now, claimToken, attemptCount: { increment: 1 }, nextAttemptAt: null, lastError: null, priority: 0 },
       });
       if (claimed.count !== 1) return null;
       const job = await transaction.downloadJob.findUniqueOrThrow({
@@ -59,14 +62,15 @@ export class DownloadRepository {
 
   async claimById(jobId: string, now: Date, staleBefore: Date): Promise<ClaimedDownloadJob | null> {
     return withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
-      const stale = await transaction.downloadJob.findUnique({ where: { id: jobId }, select: { status: true, startedAt: true, sourcePostId: true } });
-      if (stale?.status === "RUNNING" && stale.startedAt && stale.startedAt < staleBefore) {
-        await transaction.downloadJob.update({ where: { id: jobId }, data: { status: "RETRY_WAIT", nextAttemptAt: now, lastError: "Recovered stale download claim", startedAt: null } });
+      const stale = await transaction.downloadJob.findUnique({ where: { id: jobId }, select: { status: true, startedAt: true, heartbeatAt: true, sourcePostId: true } });
+      if (stale?.status === "RUNNING" && ((stale.heartbeatAt && stale.heartbeatAt < staleBefore) || (!stale.heartbeatAt && stale.startedAt && stale.startedAt < staleBefore))) {
+        await transaction.downloadJob.update({ where: { id: jobId }, data: { status: "RETRY_WAIT", nextAttemptAt: now, lastError: "Recovered stale download claim", startedAt: null, heartbeatAt: null, claimToken: null } });
         await transaction.sourcePost.update({ where: { id: stale.sourcePostId }, data: { status: "QUEUED_FOR_DOWNLOAD" } });
       }
+      const claimToken = randomUUID();
       const claimed = await transaction.downloadJob.updateMany({
         where: { id: jobId, OR: [{ status: "PENDING" }, { status: "RETRY_WAIT", nextAttemptAt: { lte: now } }] },
-        data: { status: "RUNNING", startedAt: now, attemptCount: { increment: 1 }, nextAttemptAt: null, lastError: null, priority: 0 },
+        data: { status: "RUNNING", startedAt: now, heartbeatAt: now, claimToken, attemptCount: { increment: 1 }, nextAttemptAt: null, lastError: null, priority: 0 },
       });
       if (claimed.count !== 1) return null;
       const job = await transaction.downloadJob.findUniqueOrThrow({
@@ -77,6 +81,16 @@ export class DownloadRepository {
     }));
   }
 
+  async heartbeat(jobId: string, claimToken: string, now = new Date()): Promise<boolean> {
+    return withDatabaseRetry(async () => {
+      const updated = await this.client.downloadJob.updateMany({
+        where: { id: jobId, status: "RUNNING", claimToken },
+        data: { heartbeatAt: now },
+      });
+      return updated.count === 1;
+    });
+  }
+
   async requestNow(jobId: string, requestedAt = new Date()): Promise<void> {
     await withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const job = await transaction.downloadJob.findUniqueOrThrow({ where: { id: jobId }, select: { status: true, sourcePostId: true } });
@@ -84,7 +98,7 @@ export class DownloadRepository {
       if (job.status === "RUNNING") throw new Error("Download is already running");
       await transaction.downloadJob.update({
         where: { id: jobId },
-        data: { status: "PENDING", attemptCount: 0, nextAttemptAt: null, lastError: null, startedAt: null, priority: 100, requestedAt },
+        data: { status: "PENDING", attemptCount: 0, nextAttemptAt: null, lastError: null, startedAt: null, heartbeatAt: null, claimToken: null, priority: 100, requestedAt },
       });
       await transaction.sourcePost.update({ where: { id: job.sourcePostId }, data: { status: "QUEUED_FOR_DOWNLOAD" } });
     }));
@@ -95,35 +109,45 @@ export class DownloadRepository {
       const job = await transaction.downloadJob.findUniqueOrThrow({ where: { id: jobId }, select: { status: true, sourcePostId: true } });
       if (job.status === "RUNNING") throw new Error("Running downloads cannot be cancelled");
       if (job.status === "COMPLETED") throw new Error("Completed downloads cannot be cancelled");
-      await transaction.downloadJob.update({ where: { id: jobId }, data: { status: "CANCELLED", nextAttemptAt: null, priority: 0 } });
+      await transaction.downloadJob.update({ where: { id: jobId }, data: { status: "CANCELLED", nextAttemptAt: null, priority: 0, startedAt: null, heartbeatAt: null, claimToken: null } });
       await transaction.sourcePost.update({ where: { id: job.sourcePostId }, data: { status: "SKIPPED" } });
     }));
   }
 
-  async complete(jobId: string, sourcePostId: string, asset: MediaAssetInput, completedAt: Date): Promise<void> {
-    await withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
-      await transaction.mediaAsset.upsert({
-        where: { sourcePostId },
-        create: { sourcePostId, ...asset },
-        update: asset,
-      });
-      await transaction.sourcePost.update({ where: { id: sourcePostId }, data: { status: "DOWNLOADED" } });
-      await transaction.downloadJob.update({
-        where: { id: jobId },
-        data: { status: "COMPLETED", completedAt, nextAttemptAt: null, lastError: null, priority: 0 },
-      });
-    }));
+  async complete(jobId: string, claimToken: string, sourcePostId: string, asset: MediaAssetInput, completedAt: Date): Promise<boolean> {
+    return withDatabaseRetry(async () => {
+      const job = await this.client.downloadJob.findUnique({ where: { id: jobId }, select: { status: true, claimToken: true } });
+      if (!job || job.status !== "RUNNING" || job.claimToken !== claimToken) return false;
+      const result = await this.client.$transaction([
+        this.client.mediaAsset.upsert({
+          where: { sourcePostId },
+          create: { sourcePostId, ...asset },
+          update: asset,
+        }),
+        this.client.sourcePost.update({ where: { id: sourcePostId }, data: { status: "DOWNLOADED" } }),
+        this.client.downloadJob.update({
+          where: { id: jobId },
+          data: { status: "COMPLETED", completedAt, nextAttemptAt: null, lastError: null, priority: 0, startedAt: null, heartbeatAt: null, claimToken: null },
+        }),
+      ]);
+      return result.length === 3;
+    });
   }
 
-  async fail(jobId: string, sourcePostId: string, error: string, nextAttemptAt: Date | null): Promise<void> {
-    await withDatabaseRetry(() => this.client.$transaction([
-      this.client.downloadJob.update({
-        where: { id: jobId },
-        data: { status: nextAttemptAt ? "RETRY_WAIT" : "FAILED", lastError: error.slice(0, 2_000), nextAttemptAt, startedAt: null },
-      }),
-      this.client.sourcePost.update({
-        where: { id: sourcePostId }, data: { status: nextAttemptAt ? "QUEUED_FOR_DOWNLOAD" : "FAILED" },
-      }),
-    ])).then(() => undefined);
+  async fail(jobId: string, claimToken: string, sourcePostId: string, error: string, nextAttemptAt: Date | null): Promise<boolean> {
+    return withDatabaseRetry(async () => {
+      const job = await this.client.downloadJob.findUnique({ where: { id: jobId }, select: { status: true, claimToken: true } });
+      if (!job || job.status !== "RUNNING" || job.claimToken !== claimToken) return false;
+      const result = await this.client.$transaction([
+        this.client.downloadJob.update({
+          where: { id: jobId },
+          data: { status: nextAttemptAt ? "RETRY_WAIT" : "FAILED", lastError: error.slice(0, 2_000), nextAttemptAt, startedAt: null, heartbeatAt: null, claimToken: null },
+        }),
+        this.client.sourcePost.update({
+          where: { id: sourcePostId }, data: { status: nextAttemptAt ? "QUEUED_FOR_DOWNLOAD" : "FAILED" },
+        }),
+      ]);
+      return result.length === 2;
+    });
   }
 }

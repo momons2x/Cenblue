@@ -7,7 +7,7 @@ function timeValue(hour: string, minute: string): string {
   return `${hour}:${minute}`;
 }
 
-export function ScheduleField({ value = null, timeZone, optional = false }: { value?: string | null; timeZone: string; optional?: boolean; compact?: boolean }) {
+export function ScheduleField({ value = null, timeZone, optional = false }: { value?: string | null; timeZone: string; optional?: boolean }) {
   const [parts, setParts] = useState(() => scheduleParts(value, timeZone));
 
   useEffect(() => {

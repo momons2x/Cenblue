@@ -149,6 +149,41 @@ describe("downloader services", () => {
     expect(await prisma.sourcePost.findUniqueOrThrow({ where: { platformPostId: "20007" } })).toMatchObject({ status: "DOWNLOADING" });
   });
 
+  it("issues a claim token and does not reclaim a heartbeating download", async () => {
+    await queuedPost("20014");
+    const repository = new DownloadRepository(prisma);
+    const claimed = await repository.claimNext(new Date(), new Date(0));
+    expect(claimed?.claimToken).toBeTruthy();
+    const before = new Date(Date.now() - 20 * 60_000);
+    await prisma.downloadJob.update({ where: { id: claimed!.id }, data: { startedAt: before, heartbeatAt: new Date() } });
+    expect(await repository.claimNext(new Date(), new Date(Date.now() - 15 * 60_000))).toBeNull();
+    expect(await repository.heartbeat(claimed!.id, claimed!.claimToken!)).toBe(true);
+  });
+
+  it("fences download completion with the current claim token", async () => {
+    await queuedPost("20015");
+    const repository = new DownloadRepository(prisma);
+    const claimed = await repository.claimNext(new Date(), new Date(0));
+    expect(await repository.complete(claimed!.id, "wrong-token", claimed!.sourcePost.id, {
+      filePath: "video.mp4", mimeType: "video/mp4", fileSize: 1, durationSeconds: 1, width: 1, height: 1, checksum: "fence-checksum", thumbnailPath: null, codec: null, perceptualHash: null, localRemovedAt: null,
+    }, new Date())).toBe(false);
+    expect(await prisma.downloadJob.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({ status: "RUNNING", claimToken: claimed!.claimToken });
+    expect(await repository.complete(claimed!.id, claimed!.claimToken!, claimed!.sourcePost.id, {
+      filePath: "video.mp4", mimeType: "video/mp4", fileSize: 1, durationSeconds: 1, width: 1, height: 1, checksum: "fence-checksum", thumbnailPath: null, codec: null, perceptualHash: null, localRemovedAt: null,
+    }, new Date())).toBe(true);
+    expect(await prisma.downloadJob.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({ status: "COMPLETED" });
+  });
+
+  it("fences download failure with the current claim token", async () => {
+    await queuedPost("20016");
+    const repository = new DownloadRepository(prisma);
+    const claimed = await repository.claimNext(new Date(), new Date(0));
+    expect(await repository.fail(claimed!.id, "wrong-token", claimed!.sourcePost.id, "stale", null)).toBe(false);
+    expect(await prisma.downloadJob.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({ status: "RUNNING", claimToken: claimed!.claimToken });
+    expect(await repository.fail(claimed!.id, claimed!.claimToken!, claimed!.sourcePost.id, "network", null)).toBe(true);
+    expect(await prisma.downloadJob.findUniqueOrThrow({ where: { id: claimed!.id } })).toMatchObject({ status: "FAILED", lastError: "network" });
+  });
+
   it("queues distinct post IDs even when their captions are identical", async () => {
     await queuedPost("20009");
     await queuedPost("20010");

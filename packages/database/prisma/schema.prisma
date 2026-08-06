@@ -73,6 +73,8 @@ model DownloadJob {
   nextAttemptAt DateTime?
   lastError     String?
   startedAt     DateTime?
+  heartbeatAt   DateTime?
+  claimToken    String?
   completedAt   DateTime?
   priority      Int        @default(0)
   requestedAt   DateTime?
@@ -83,6 +85,7 @@ model DownloadJob {
   collectorIdentity BrowserIdentity? @relation(fields: [collectorIdentityId], references: [id], onDelete: SetNull)
 
   @@index([status, nextAttemptAt])
+  @@index([status, heartbeatAt])
   @@index([collectorIdentityId, status])
 }
 

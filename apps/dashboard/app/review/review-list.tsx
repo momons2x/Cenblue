@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { approveReview, compressReviewVideo, rejectReview, resolveReviewCaption, returnToDownloads, saveReview } from "../actions";
 import { ConfirmSubmitButton, SubmitButton } from "../controls";
-import { Badge } from "../ui";
+import { Badge } from "../ui-primitives";
 import { ScheduleField } from "../schedule-field";
 import { ExpandableText } from "../expandable-text";
 

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { removeMedia } from "../actions";
 import { ActionForm, ConfirmSubmitButton } from "../controls";
 import type { VideoFileEntry } from "../lib/data";
-import { Badge } from "../ui";
+import { Badge } from "../ui-primitives";
 
 function drawUnique(files: VideoFileEntry[], count: number): VideoFileEntry[] {
   const pool = [...files];

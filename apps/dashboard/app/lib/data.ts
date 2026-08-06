@@ -197,9 +197,9 @@ export async function getLogs(filters: { level?: string; component?: string } = 
     const logNames = ordered.map((entry) => entry.name).filter((name) => /\.(log|json)(\.\d+)?$/i.test(name));
     const images = ordered.map((entry) => entry.name).filter((name) => /\.(png|jpe?g|webp)$/i.test(name)).slice(0, 20);
     const entries: { file: string; level: string; component: string; operation: string | null; message: string; timestamp: string | null }[] = [];
-    for (const name of logNames.slice(0, 5)) {
+    for (const name of logNames) {
       const content = await readFile(resolve(directory, name), "utf8");
-      for (const line of content.slice(-20_000).split("\n")) {
+      for (const line of content.slice(-100_000).split("\n")) {
         if (!line.trim()) continue;
         try {
           const parsed: Record<string, unknown> = JSON.parse(line);

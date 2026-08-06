@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
 const port = "3107";
-const routes = ["/", "/sources", "/compose", "/review", "/queue", "/downloads", "/videos", "/published", "/logs", "/settings"];
+const routes = ["/", "/sources", "/compose", "/review", "/queue", "/downloads", "/videos", "/published", "/logs", "/settings", "/api/health"];
 let server: ChildProcess | undefined;
 
 async function waitForServer(url: string): Promise<void> {

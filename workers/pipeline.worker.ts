@@ -1,7 +1,7 @@
 import { applyStoredSettings, loadConfig } from "@cenblu/config";
 import { resolve } from "node:path";
 import { CollectionService, PlaywrightTimelineBrowser, XPlaywrightCollector } from "@cenblu/collector";
-import { DatabaseExclusiveLease, identityFingerprint, identityLeaseName, prisma, DownloadRepository, PublishRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
+import { DatabaseExclusiveLease, identityFingerprint, identityLeaseName, prisma, DownloadRepository, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
 import { LocalPublishMediaVerifier, PublishService, resolveCaption, XPlaywrightPublisher } from "@cenblu/publisher";
 import { PipelineRunner, PipelineService } from "@cenblu/scheduler";
@@ -31,11 +31,13 @@ async function main(): Promise<void> {
     new FfmpegPerceptualVideoHasher(processRunner, config.ffmpegBinary),
   );
   const publishRepository = new PublishRepository(prisma);
+  const runtime = new RuntimeStatusRepository(prisma);
   const pipeline = new PipelineService(new SchedulerRepository(prisma), {
-    collect: async () => { await collector.runOnce(); },
-    download: async () => downloader.processPending(config.downloadConcurrency, config.downloadBatchLimit),
+    collect: async () => { await runtime.update("pipeline", "RUNNING", "collection"); try { await collector.runOnce(); } catch (error) { await runtime.update("pipeline", "ERROR", undefined, error instanceof Error ? error.message : String(error)); throw error; } },
+    download: async () => { await runtime.update("pipeline", "RUNNING", "download"); try { return await downloader.processPending(config.downloadConcurrency, config.downloadBatchLimit); } catch (error) { await runtime.update("pipeline", "ERROR", undefined, error instanceof Error ? error.message : String(error)); throw error; } },
     publish: async () => {
       if (config.publishMode !== "AUTOMATIC") return false;
+      await runtime.update("pipeline", "RUNNING", "publish");
       const identities = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true, automaticEnabled: true, verifiedAt: { not: null } }, orderBy: { createdAt: "asc" } });
       for (const identity of identities) {
         if (!identity.expectedUsername || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) continue;
@@ -51,10 +53,16 @@ async function main(): Promise<void> {
   }, logger, config.publishIntervalMinutes, config.workerLockTimeoutMinutes * 60_000, (source) => resolveCaption(source, config.captionTemplates));
 
   if (process.argv[2] === "--once") {
-    await pipeline.runOnce();
+    try {
+      await pipeline.runOnce();
+      await runtime.update("pipeline", "IDLE");
+    } catch (error) {
+      await runtime.update("pipeline", "ERROR", undefined, error instanceof Error ? error.message : String(error));
+      throw error;
+    }
     return;
   }
-  const runner = new PipelineRunner(pipeline, logger, config.collectionIntervalMinutes);
+  const runner = new PipelineRunner(pipeline, logger, config.collectionIntervalMinutes, async () => { await runtime.update("pipeline", "IDLE"); });
   runner.start();
   let shuttingDown = false;
   const shutdown = async () => {

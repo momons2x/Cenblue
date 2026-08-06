@@ -1,5 +1,5 @@
 import { applyStoredSettings, browserBindingFingerprint, loadConfig } from "@cenblu/config";
-import { DatabaseExclusiveLease, identityLeaseName, prisma, PublishRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
+import { DatabaseExclusiveLease, identityLeaseName, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
 import { resolve } from "node:path";
 import { cloneEdgeProfile, discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChromiumProfile, PublishService, validateCaption, XPlaywrightPublisher } from "@cenblu/publisher";
 import { createLogger } from "@cenblu/shared/logger";
@@ -70,8 +70,16 @@ async function main(): Promise<void> {
     3,
     identity?.id,
   );
-  const processed = await service.processNext() ? 1 : 0;
-  logger.info({ operation: "publisher.cycle.complete", processed }, "Publish cycle completed");
+  const runtime = new RuntimeStatusRepository(prisma);
+  await runtime.update("publisher", "RUNNING", "publish");
+  try {
+    const processed = await service.processNext() ? 1 : 0;
+    await runtime.update("publisher", "IDLE");
+    logger.info({ operation: "publisher.cycle.complete", processed }, "Publish cycle completed");
+  } catch (error) {
+    await runtime.update("publisher", "ERROR", undefined, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
 }
 
 main()

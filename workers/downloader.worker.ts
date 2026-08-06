@@ -1,6 +1,6 @@
 import { applyStoredSettings, loadConfig } from "@cenblu/config";
 import { resolve } from "node:path";
-import { DatabaseExclusiveLease, identityLeaseName, prisma, DownloadRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
+import { DatabaseExclusiveLease, identityLeaseName, prisma, DownloadRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
 import { createLogger } from "@cenblu/shared/logger";
 import { resolveCaption } from "@cenblu/publisher";
@@ -24,9 +24,17 @@ async function main(): Promise<void> {
     3,
     new FfmpegPerceptualVideoHasher(runner, config.ffmpegBinary),
   );
-  const processed = await service.processPending(config.downloadConcurrency, config.downloadBatchLimit);
-  await new SchedulerRepository(prisma).scheduleDownloadedAssets(new Date(), 0, (source) => resolveCaption(source, config.captionTemplates));
-  logger.info({ operation: "downloader.cycle.complete", processed }, "Download cycle completed");
+  const runtime = new RuntimeStatusRepository(prisma);
+  await runtime.update("downloader", "RUNNING", "download");
+  try {
+    const processed = await service.processPending(config.downloadConcurrency, config.downloadBatchLimit);
+    await new SchedulerRepository(prisma).scheduleDownloadedAssets(new Date(), 0, (source) => resolveCaption(source, config.captionTemplates));
+    await runtime.update("downloader", "IDLE");
+    logger.info({ operation: "downloader.cycle.complete", processed }, "Download cycle completed");
+  } catch (error) {
+    await runtime.update("downloader", "ERROR", undefined, error instanceof Error ? error.message : String(error));
+    throw error;
+  }
 }
 
 main()
