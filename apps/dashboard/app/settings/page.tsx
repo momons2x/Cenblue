@@ -1,11 +1,11 @@
-import { checkIdentitySession, clearAllBrowserProfiles, createBrowserIdentity, deleteIdentityProfile, openIdentityLogin, resetAllData, saveCaptionSettings, saveNotificationSettings, saveReviewSettings, saveSettings, sendTestNotification, toggleBrowserIdentity, toggleIdentityAutomatic, updateIdentityBrowser } from "../actions";
+import { checkIdentitySession, clearAllBrowserProfiles, createBrowserIdentity, deleteIdentityPermanently, deleteIdentityProfile, openIdentityLogin, resetAllData, saveCaptionSettings, saveNotificationSettings, saveReviewSettings, saveSettings, sendTestNotification, toggleBrowserIdentity, toggleIdentityAutomatic, updateIdentityBrowser } from "../actions";
 import { ActionForm, ConfirmSubmitButton, SubmitButton } from "../controls";
 import { getResetPreview, getSettings } from "../lib/data";
 import { Badge, Empty, Shell } from "../ui";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = { captionSaved?: string; identityCreated?: string; profileOpened?: string; profileDeleted?: string; allProfilesDeleted?: string; reviewSaved?: string; notificationsSaved?: string; notificationTest?: string };
+type SearchParams = { captionSaved?: string; identityCreated?: string; profileOpened?: string; profileDeleted?: string; allProfilesDeleted?: string; reviewSaved?: string; notificationsSaved?: string; notificationTest?: string; identityDeleted?: string };
 
 export default async function SettingsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const params = await searchParams;
@@ -33,6 +33,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
             <ActionForm action={toggleBrowserIdentity}><input type="hidden" name="identityId" value={identity.id} /><input type="hidden" name="enabled" value={String(!identity.enabled)} /><SubmitButton>{identity.enabled ? "Pause identity" : "Enable identity"}</SubmitButton></ActionForm>
             {!collector && <ActionForm action={toggleIdentityAutomatic}><input type="hidden" name="identityId" value={identity.id} /><input type="hidden" name="automatic" value={String(!identity.automaticEnabled)} /><SubmitButton>{identity.automaticEnabled ? "Disable automatic" : "Enable automatic"}</SubmitButton></ActionForm>}
             {identity.managed ? <ActionForm action={deleteIdentityProfile}><input type="hidden" name="identityId" value={identity.id} /><ConfirmSubmitButton message={`Delete the local ${collector ? "Collector" : "Publisher"} profile for @${identity.expectedUsername}? Cookies and login data will be removed, while the identity and its work remain.`}>Delete local profile</ConfirmSubmitButton></ActionForm> : <span className="form-note">Legacy profile preserved outside managed identity storage.</span>}
+            <ActionForm action={deleteIdentityPermanently} className="inline-form"><input type="hidden" name="identityId" value={identity.id} /><input name="confirmation" placeholder={`DELETE ${identity.label}`} aria-label={`Type DELETE ${identity.label} to confirm permanent deletion`} required /><ConfirmSubmitButton message={`Permanently delete ${identity.label} and all of its browser profile files? Existing publish jobs will be detached and marked Legacy Publisher, and assigned sources will be unassigned. This cannot be undone.`}>Delete permanently</ConfirmSubmitButton></ActionForm>
           </div>
         </article>)}
       </div>
@@ -43,6 +44,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Pro
   return <Shell title="Settings" eyebrow="Cenblue / local configuration">
     {params.identityCreated && <div className="toast bookmark-success" role="status">Browser identity created. Open its profile to sign into X.</div>}
     {params.profileDeleted && <div className="toast bookmark-success" role="status">Browser profile deleted. Its local cookies and X session were removed.</div>}
+    {params.identityDeleted && <div className="toast bookmark-success" role="status">Browser identity permanently deleted. Its profile files were removed and its work was detached.</div>}
     {params.allProfilesDeleted !== undefined && <div className="toast bookmark-success" role="status">All managed browser profiles were deleted. {Number(params.allProfilesDeleted)} identities were preserved and now require login and verification.</div>}
 
     <section className="panel identity-workspace"><div className="panel-head"><div><p className="eyebrow">Isolated X identities</p><h2>Know exactly who reads and who publishes.</h2></div><Badge value={settings.identities.some((identity) => identity.busy) ? "RUNNING" : "AVAILABLE"} /></div><p className="form-note browser-intro">Every identity owns a separate local browser profile. Collector and Publisher colors, direction marks, account checks, jobs, and leases stay distinct.</p><div className="identity-lanes">{identityLane("COLLECTOR", collectors)}{identityLane("PUBLISHER", publishers)}</div></section>

@@ -118,9 +118,19 @@ async function collectSources(sourceIds?: string[]): Promise<{ busy: boolean }> 
     const batch = groups.slice(index, index + 2);
     const results = await Promise.all(batch.map(async ([identityId, identitySources]) => {
       const identity = identityMap.get(identityId);
-      if (!identity) throw new Error("A source is assigned to a missing Collector identity.");
-      if (!identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername) throw new Error(`${identity.label} must be verified before collection.`);
       const runs = new CollectionRunRepository(prisma);
+      if (!identity) {
+        const run = await runs.start(identitySources.map((source) => ({ id: source.id, targetNew: Math.min(source.collectLimit, config.postsPerSource) })));
+        await runs.finish(run.id, "FAILED", "The assigned Collector identity no longer exists. Reassign these sources to a verified Collector.");
+        for (const source of identitySources) await runs.finishSource(run.id, source.id, { failed: true, cancelled: false, inserted: 0, error: "The assigned Collector identity no longer exists." });
+        return false;
+      }
+      if (!identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername) {
+        const run = await runs.start(identitySources.map((source) => ({ id: source.id, targetNew: Math.min(source.collectLimit, config.postsPerSource) })));
+        await runs.finish(run.id, "FAILED", `${identity.label} must be verified before collection. Reassign these sources to a verified Collector or verify ${identity.label}.`);
+        for (const source of identitySources) await runs.finishSource(run.id, source.id, { failed: true, cancelled: false, inserted: 0, error: `${identity.label} is not verified for collection.` });
+        return false;
+      }
       await runs.recoverStale(new Date(Date.now() - Math.max(config.workerLockTimeoutMinutes, 10) * 60_000));
       const run = await runs.start(identitySources.map((source) => ({ id: source.id, targetNew: Math.min(source.collectLimit, config.postsPerSource) })), identity.id);
       const runtime = new RuntimeStatusRepository(prisma);
@@ -829,6 +839,28 @@ export async function deleteIdentityProfile(formData: FormData) {
   redirect(`/settings?profileDeleted=${encodeURIComponent(identity.id)}`);
 }
 
+export async function deleteIdentityPermanently(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const confirmation = z.string().parse(formData.get("confirmation")).trim();
+  const repository = new BrowserIdentityRepository(prisma);
+  const identity = await repository.find(identityId);
+  if (!identity) throw new Error("Browser identity no longer exists.");
+  if (confirmation !== `DELETE ${identity.label}`) throw new Error(`Type DELETE ${identity.label} to confirm.`);
+  const config = loadConfig();
+  const activeWork = await prisma.publishJob.count({ where: { publisherIdentityId: identityId, status: "RUNNING" } });
+  if (activeWork > 0) throw new Error("This identity has running publication work. Stop it before deleting.");
+  const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+  const removal = await lease.run(() => new BrowserProfileRemovalService(config.repositoryRoot).removeIdentity(identity.role === "COLLECTOR" ? "collector" : "publisher", basename(identity.profilePath)));
+  if (removal.status === "failed" || removal.status === "residual") throw new Error(removal.error ?? "The browser profile could not be fully deleted.");
+  await prisma.$transaction([
+    prisma.publishJob.updateMany({ where: { publisherIdentityId: identityId }, data: { publisherIdentityId: null } }),
+    prisma.schedulerLock.deleteMany({ where: { name: identityLeaseName(identityId) } }),
+    prisma.browserIdentity.delete({ where: { id: identityId } }),
+  ]);
+  refresh("/settings", "/", "/queue", "/review", "/published");
+  redirect(`/settings?identityDeleted=${encodeURIComponent(identity.id)}`);
+}
+
 async function withIdentityLeases<T>(identityIds: string[], operation: () => Promise<T>): Promise<T> {
   const config = loadConfig();
   const leases = identityIds.sort().map((identityId) => new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identityId), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000));
@@ -850,9 +882,12 @@ export async function clearAllBrowserProfiles(formData: FormData) {
 
 export async function assignSourceCollector(formData: FormData) {
   const sourceId = id.parse(formData.get("sourceId"));
-  const collectorIdentityId = id.parse(formData.get("collectorIdentityId"));
-  const collector = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR", enabled: true } });
-  if (!collector) throw new Error("Choose an enabled Collector identity.");
+  const raw = formData.get("collectorIdentityId");
+  const collectorIdentityId = raw === null || String(raw).trim() === "" ? null : id.parse(raw);
+  if (collectorIdentityId) {
+    const collector = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR" } });
+    if (!collector) throw new Error("Choose an existing Collector identity.");
+  }
   await prisma.sourceAccount.update({ where: { id: sourceId }, data: { collectorIdentityId } });
   refresh("/sources");
 }
