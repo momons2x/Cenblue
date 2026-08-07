@@ -18,7 +18,7 @@
     "@cenblu/notifications": "workspace:*",
     "@cenblu/operations": "workspace:*",
     "@js-temporal/polyfill": "0.5.1",
-    "next": "16.2.11",
+    "next": "16.3.0",
     "pino": "10.3.1",
     "react": "19.2.8",
     "react-dom": "19.2.8"
