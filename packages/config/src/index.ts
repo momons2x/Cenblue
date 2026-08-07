@@ -9,6 +9,7 @@ export const storedConfigKeys = [
   "COLLECTION_INTERVAL_MINUTES", "POSTS_PER_SOURCE", "PUBLISH_INTERVAL_MINUTES", "PLAYWRIGHT_HEADLESS",
   "PUBLISH_MODE", "PUBLISH_MIN_UPLOAD_MBPS", "PUBLISH_MAX_UPLOAD_MINUTES", "DOWNLOAD_CONCURRENCY",
   "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "CAPTION_TEMPLATES", "APP_TIMEZONE",
+  "SCHEDULE_ACTIVE_START", "SCHEDULE_ACTIVE_END", "SCHEDULE_JITTER_MINUTES", "SCHEDULE_MIN_GAP_MINUTES",
 ] as const;
 
 export const browserIds = ["msedge", "chrome", "brave", "chromium", "vivaldi", "opera", "custom"] as const;
@@ -62,6 +63,10 @@ const environmentSchema = z.object({
   COLLECTOR_MAX_SOURCE_SECONDS: z.coerce.number().int().min(30).max(1_800).default(300),
   PUBLISH_MODE: z.enum(["ASSISTED", "AUTOMATIC"]).default("ASSISTED"),
   CAPTION_TEMPLATES: z.string().default("{sourceCaption}"),
+  SCHEDULE_ACTIVE_START: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Active window start must be HH:MM").default("09:00"),
+  SCHEDULE_ACTIVE_END: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Active window end must be HH:MM").default("22:00"),
+  SCHEDULE_JITTER_MINUTES: z.coerce.number().int().min(0).max(120).default(10),
+  SCHEDULE_MIN_GAP_MINUTES: z.coerce.number().int().min(0).max(180).default(15),
   LOG_MAX_BYTES: z.coerce.number().int().min(10_000).default(5_000_000),
   LOG_RETAINED_FILES: z.coerce.number().int().min(1).max(20).default(5),
   BACKUP_STORAGE_PATH: z.string().min(1).default("./storage/backups"),
@@ -110,6 +115,10 @@ export type AppConfig = {
   collectorMaxSourceSeconds: number;
   publishMode: "ASSISTED" | "AUTOMATIC";
   captionTemplates: string;
+  scheduleActiveStart: string;
+  scheduleActiveEnd: string;
+  scheduleJitterMinutes: number;
+  scheduleMinGapMinutes: number;
   logMaxBytes: number;
   logRetainedFiles: number;
   backupStoragePath: string;
@@ -182,6 +191,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     collectorMaxSourceSeconds: parsed.COLLECTOR_MAX_SOURCE_SECONDS,
     publishMode: parsed.PUBLISH_MODE,
     captionTemplates: parsed.CAPTION_TEMPLATES,
+    scheduleActiveStart: parsed.SCHEDULE_ACTIVE_START,
+    scheduleActiveEnd: parsed.SCHEDULE_ACTIVE_END,
+    scheduleJitterMinutes: parsed.SCHEDULE_JITTER_MINUTES,
+    scheduleMinGapMinutes: parsed.SCHEDULE_MIN_GAP_MINUTES,
     logMaxBytes: parsed.LOG_MAX_BYTES,
     logRetainedFiles: parsed.LOG_RETAINED_FILES,
     backupStoragePath: localPath(repositoryRoot, parsed.BACKUP_STORAGE_PATH, "BACKUP_STORAGE_PATH"),

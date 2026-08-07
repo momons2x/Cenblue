@@ -34,6 +34,7 @@ The project intends to follow semantic versioning once release automation is est
 - Publish-success notifications: successful publishes now alert all configured channels, with a **Send test publish notification** button on the Published page to verify the chain.
 - Discord bot commands moved from slash to `!` prefix commands (`!status`, `!pipeline`, `!test`, `!help`), with an explicit online presence so the bot shows as online in Discord.
 - Telegram commands: the dashboard long-polls `getUpdates` and answers `/status`, `/pipeline`, `/test`, and `/help` for the configured chat, so state can be queried from the phone.
+- Batch scheduling with a humanizer: shuffle a set of approved posts and auto-assign staggered times across a configurable active window with random jitter and a minimum gap, plus a per-batch "posts today" override.
 
 ### Changed
 

@@ -6,6 +6,7 @@
   "exports": { ".": "./src/index.ts" },
   "dependencies": {
     "@cenblu/database": "workspace:*",
+    "@js-temporal/polyfill": "0.5.1",
     "node-cron": "4.6.0",
     "pino": "10.3.1"
   }

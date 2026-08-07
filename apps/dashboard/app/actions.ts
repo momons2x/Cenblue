@@ -13,6 +13,7 @@ import { DownloadRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
 import { NotificationEmitter, TelegramTransport, type NotificationChannel } from "@cenblu/notifications";
 import { DiscordDmTransport } from "@cenblu/discord-bot";
+import { buildBatchSchedule } from "@cenblu/scheduler";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
 import { discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChromiumProfile, PublishService, resolveCaption, validateCaption, validateChromiumExecutable, XPlaywrightPublisher } from "@cenblu/publisher";
 import { combineExclusiveLeases, ResourceBusyError } from "@cenblu/shared/lease";
@@ -340,6 +341,43 @@ export async function bulkReview(formData: FormData) {
     for (const jobId of jobIds) await repository.returnToDownloads(jobId);
   }
   refresh("/review", "/queue", "/");
+}
+
+export async function scheduleBatchReview(formData: FormData) {
+  const jobIds = z.array(id).min(1, "Select at least one review item.").parse(formData.getAll("publishJobId"));
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const jobs = await prisma.publishJob.findMany({ where: { id: { in: jobIds } }, select: { id: true, sourcePost: { select: { postedAt: true } } } });
+  if (jobs.length !== jobIds.length) throw new Error("One or more selected review items no longer exist.");
+  const rawDay = String(formData.get("scheduleDay") ?? "").trim();
+  const targetDay = rawDay || new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(new Date());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDay)) throw new Error("Choose a valid schedule day.");
+  const rawCount = String(formData.get("postsToday") ?? "").trim();
+  const countOverride = rawCount === "" ? undefined : z.coerce.number().int().min(1).max(50).parse(rawCount);
+  const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
+  const publishers = await prisma.browserIdentity.findMany({ where: { id: { in: publisherIdentityIds }, role: "PUBLISHER", enabled: true } });
+  if (publishers.length !== new Set(publisherIdentityIds).size) throw new Error("One or more selected Publisher identities are unavailable.");
+
+  const schedule = buildBatchSchedule({
+    jobs: jobs.map((job) => ({ id: job.id })),
+    timeZone: config.timezone,
+    activeStart: config.scheduleActiveStart,
+    activeEnd: config.scheduleActiveEnd,
+    jitterMinutes: config.scheduleJitterMinutes,
+    minGapMinutes: config.scheduleMinGapMinutes,
+    countOverride,
+    targetDay,
+  });
+
+  const repository = new PublishRepository(prisma);
+  for (const jobId of jobIds) {
+    const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: jobId } });
+    await repository.approveTargets(jobId, publisherIdentityIds, schedule.find((entry) => entry.jobId === jobId)?.scheduledFor ?? null, job.caption);
+  }
+  refresh("/review", "/queue", "/");
+  const first = schedule[0]?.scheduledFor;
+  const last = schedule[schedule.length - 1]?.scheduledFor;
+  const intervalMinutes = schedule.length > 1 && first && last ? Math.round((last.getTime() - first.getTime()) / (schedule.length - 1) / 60_000) : 0;
+  redirect(`/review?batchScheduled=${schedule.length}&batchDay=${targetDay}&batchInterval=${intervalMinutes}&batchFirst=${first ? first.toISOString() : ""}`);
 }
 
 
@@ -921,6 +959,10 @@ export async function saveSettings(formData: FormData) {
     SOURCE_ACCOUNT_LIMIT: String(z.coerce.number().int().min(1).max(100).parse(formData.get("sourceAccountLimit"))),
     DAILY_POST_MINIMUM: String(z.coerce.number().int().min(0).max(20).parse(formData.get("dailyMinimum"))),
     DAILY_POST_PREFERRED: String(z.coerce.number().int().min(0).max(20).parse(formData.get("dailyPreferred"))),
+    SCHEDULE_ACTIVE_START: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Active window start must be HH:MM").parse(formData.get("scheduleActiveStart")),
+    SCHEDULE_ACTIVE_END: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Active window end must be HH:MM").parse(formData.get("scheduleActiveEnd")),
+    SCHEDULE_JITTER_MINUTES: String(z.coerce.number().int().min(0).max(120).parse(formData.get("scheduleJitterMinutes"))),
+    SCHEDULE_MIN_GAP_MINUTES: String(z.coerce.number().int().min(0).max(180).parse(formData.get("scheduleMinGapMinutes"))),
     APP_TIMEZONE: timezone,
   };
   await new SettingsRepository(prisma).setMany(values);

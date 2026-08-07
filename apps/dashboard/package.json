@@ -17,6 +17,7 @@
     "@cenblu/downloader": "workspace:*",
     "@cenblu/notifications": "workspace:*",
     "@cenblu/operations": "workspace:*",
+    "@cenblu/scheduler": "workspace:*",
     "@js-temporal/polyfill": "0.5.1",
     "next": "16.2.11",
     "pino": "10.3.1",

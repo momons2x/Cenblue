@@ -5,6 +5,7 @@ export const portableSettingKeys = [
   "COLLECTION_INTERVAL_MINUTES", "POSTS_PER_SOURCE", "PUBLISH_INTERVAL_MINUTES", "PLAYWRIGHT_HEADLESS",
   "PUBLISH_MODE", "PUBLISH_MIN_UPLOAD_MBPS", "PUBLISH_MAX_UPLOAD_MINUTES", "DOWNLOAD_CONCURRENCY",
   "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "DAILY_POST_MINIMUM", "DAILY_POST_PREFERRED", "CAPTION_TEMPLATES", "APP_TIMEZONE",
+  "SCHEDULE_ACTIVE_START", "SCHEDULE_ACTIVE_END", "SCHEDULE_JITTER_MINUTES", "SCHEDULE_MIN_GAP_MINUTES",
 ] as const;
 
 const settingsSchema = z.object({
@@ -22,6 +23,10 @@ const settingsSchema = z.object({
   DAILY_POST_PREFERRED: z.coerce.number().int().min(0).max(20).transform(String).optional(),
   CAPTION_TEMPLATES: z.string().max(10_000).optional(),
   APP_TIMEZONE: z.string().min(1).refine((value) => { try { new Intl.DateTimeFormat("en", { timeZone: value }); return true; } catch { return false; } }, "Invalid IANA timezone").optional(),
+  SCHEDULE_ACTIVE_START: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+  SCHEDULE_ACTIVE_END: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+  SCHEDULE_JITTER_MINUTES: z.coerce.number().int().min(0).max(120).transform(String).optional(),
+  SCHEDULE_MIN_GAP_MINUTES: z.coerce.number().int().min(0).max(180).transform(String).optional(),
 }).strict();
 
 const sourceSchema = z.object({

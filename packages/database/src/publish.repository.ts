@@ -76,6 +76,18 @@ export class PublishRepository {
     }));
   }
 
+  async scheduleBatch(jobIds: string[], times: { jobId: string; scheduledFor: Date }[]): Promise<void> {
+    await withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
+      const jobs = await transaction.publishJob.findMany({ where: { id: { in: jobIds } }, include: { publishedPost: true } });
+      if (jobs.length !== jobIds.length || jobs.some((job) => job.publishedPost || !["READY_FOR_REVIEW", "FAILED", "MANUAL_ATTENTION"].includes(job.status))) throw new Error("One or more selected jobs can no longer be approved.");
+      const byId = new Map(times.map((entry) => [entry.jobId, entry.scheduledFor]));
+      for (const job of jobs) {
+        await transaction.publishJob.update({ where: { id: job.id }, data: { status: "APPROVED", scheduledFor: byId.get(job.id) ?? null, nextAttemptAt: null, lastError: null, startedAt: null, heartbeatAt: null, claimToken: null, phase: null } });
+      }
+      await transaction.sourcePost.updateMany({ where: { id: { in: jobs.map((job) => job.sourcePostId) } }, data: { status: "SCHEDULED" } });
+    }));
+  }
+
   async reschedule(jobId: string, scheduledFor: Date): Promise<void> {
     await withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
       const job = await transaction.publishJob.findUniqueOrThrow({ where: { id: jobId }, include: { publishedPost: true } });

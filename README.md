@@ -203,6 +203,23 @@ The dashboard checks due jobs every 30 seconds. Future jobs remain untouched. Do
 
 All schedule controls use the configured `APP_TIMEZONE` with native date and time inputs. Approval without a date is manual-only and requires the Queue's explicit **Publish now** action; automatic workers process only due jobs with a schedule.
 
+### Batch Scheduling
+
+Instead of assigning each post a time by hand, approve a set of posts at once and let Cenblue **shuffle them and auto-assign staggered times** across a day:
+
+1. Select posts on the **Review** page and open **Bulk actions → Batch schedule**.
+2. Pick the schedule day (defaults to today) and optionally enter **Posts today** to override the global daily settings.
+3. Choose Publisher targets and approve.
+
+Cenblue shuffles the selected posts, spreads them evenly across the **active window**, and adds **random jitter** so the timing looks human. Nothing posts during the quiet hours between the window's end and the next day's start. Configure the window and jitter under **Settings → Publishing → Batch schedule**:
+
+- `SCHEDULE_ACTIVE_START` / `SCHEDULE_ACTIVE_END` — the only hours posts can land (default `09:00`–`22:00`; this is the "no posts overnight" quiet period).
+- `SCHEDULE_JITTER_MINUTES` — random ±offset per slot (default `10`).
+- `SCHEDULE_MIN_GAP_MINUTES` — minimum spacing between posts (default `15`).
+- `DAILY_POST_MINIMUM` / `DAILY_POST_PREFERRED` — the default number of posts when no per-batch override is given.
+
+Batch scheduling is platform-neutral: it only writes each job's schedule, so it works for X publishers and future platform targets alike.
+
 Published history uses responsive cards with expandable captions, media details, performance metrics, and recovery actions.
 
 ## Notifications
