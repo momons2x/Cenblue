@@ -219,6 +219,7 @@ Verification and status:
 - **Send test message** (Settings) delivers a message synchronously and reports the real result instead of just queuing it.
 - The Notifications panel shows live status: bot token validity, chat reachability, outbox counts (pending/sending/sent/dead), and the last delivery time or error.
 - From the terminal: `pnpm notify:status` prints the same report (and exits non-zero on failure), while `pnpm notify:test` sends a synchronous test message.
+- Telegram commands: while the dashboard runs, you can send `/status`, `/pipeline`, `/test`, and `/help` to your bot and it replies. The dashboard long-polls the bot for incoming messages; commands are accepted only from the configured `TELEGRAM_CHAT_ID`. This is separate from alerts — it lets you query state from your phone.
 
 Enabled alerts notify on publish failures, marking whether the job waits for manual review or will retry automatically. Repeated failures for the same job are deduplicated, and delivery is retried with backoff. The dashboard checks the outbox every 15 seconds, so notifications follow the dashboard process; keep it running to deliver alerts.
 

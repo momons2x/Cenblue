@@ -243,6 +243,28 @@ describe("telegram transport", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("chat not found");
   });
+
+  it("parses updates from getUpdates and filters non-message entries", async () => {
+    const transport = new TelegramTransport("token", async () => new Response(JSON.stringify({ ok: true, result: [
+      { update_id: 1, message: { chat: { id: 123 }, from: { id: 456 }, text: "/status" } },
+      { update_id: 2, message: { chat: { id: 123 }, from: { id: 456 }, text: "" } },
+      { update_id: 3, message: { chat: { id: 123 }, from: { id: 456 } } },
+      { update_id: 4, message: { chat: { id: 123 }, from: { id: 456 }, text: "hello" } },
+    ] }), { status: 200 }));
+    const result = await transport.getUpdates(2, 10);
+    expect(result.ok).toBe(true);
+    expect(result.updates).toEqual([
+      { updateId: 1, chatId: "123", fromUserId: "456", text: "/status" },
+      { updateId: 4, chatId: "123", fromUserId: "456", text: "hello" },
+    ]);
+  });
+
+  it("returns no updates on an empty getUpdates result", async () => {
+    const transport = new TelegramTransport("token", async () => new Response(JSON.stringify({ ok: true, result: [] }), { status: 200 }));
+    const result = await transport.getUpdates();
+    expect(result.ok).toBe(true);
+    expect(result.updates).toEqual([]);
+  });
 });
 
 describe("notification status", () => {

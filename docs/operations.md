@@ -10,7 +10,7 @@ Keep `PUBLISH_MODE=ASSISTED` until the publisher session, captions, review flow,
 
 - Confirm collector and publisher sessions after account challenges or profile changes.
 - Review Queue failures, `MANUAL_ATTENTION`, and amber past-due warnings before retrying.
-- If notifications are enabled, check that Telegram delivery still works after bot or chat changes, and confirm the `TELEGRAM_BOT_TOKEN` in `.env` is still valid. Use `pnpm notify:status` for a summary and `pnpm notify:test` for a real delivery check.
+- If notifications are enabled, check that Telegram delivery still works after bot or chat changes, and confirm the `TELEGRAM_BOT_TOKEN` in `.env` is still valid. Use `pnpm notify:status` for a summary and `pnpm notify:test` for a real delivery check. Telegram `/status`, `/pipeline`, `/test`, and `/help` commands in the bot DM reply while the dashboard runs.
 - If the Discord bot is configured, confirm `DISCORD_BOT_TOKEN`/`DISCORD_OWNER_ID` in `.env` are valid and that `/status` in a DM still replies; the bot connects whenever the dashboard runs.
 - For Discord DM alerts, keep the Discord **Notifications** toggle enabled in Settings and use **Send test DM** to confirm the bot can reach the owner's DM channel. Confirm the bot shows online in Discord and that `!status` replies in a DM after enabling the Message Content intent.
 - Check the Overview **Local runtime** panel for worker status and last errors from the CLI workers' heartbeats.

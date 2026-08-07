@@ -3,6 +3,13 @@ export type TelegramSendResult = { ok: boolean; retryAfterSeconds?: number; erro
 export type TelegramBotInfo = { ok: boolean; username?: string; name?: string; error?: string };
 export type TelegramChatInfo = { ok: boolean; title?: string; error?: string };
 
+export type TelegramUpdate = {
+  updateId: number;
+  chatId: string;
+  fromUserId: string;
+  text: string;
+};
+
 export interface NotificationTransport {
   send(recipient: string, text: string): Promise<TelegramSendResult>;
 }
@@ -33,6 +40,22 @@ export class TelegramTransport implements NotificationTransport {
     if (!response.ok) return { ok: false, error: response.error };
     const result = response.result as { title?: string } | undefined;
     return { ok: true, title: result?.title };
+  }
+
+  async getUpdates(offset?: number, timeoutSeconds = 25): Promise<{ ok: boolean; updates: TelegramUpdate[]; error?: string }> {
+    const query: Record<string, string> = { timeout: String(timeoutSeconds) };
+    if (offset !== undefined) query.offset = String(offset);
+    const response = await this.request("getUpdates", { method: "GET", query });
+    if (!response.ok) return { ok: false, updates: [], error: response.error };
+    const raw = response.result as Array<{ update_id: number; message?: { chat?: { id?: number }; from?: { id?: number }; text?: string } }> | undefined;
+    if (!Array.isArray(raw)) return { ok: true, updates: [] };
+    const updates: TelegramUpdate[] = [];
+    for (const entry of raw) {
+      if (!entry.message || !entry.message.chat?.id || !entry.message.from?.id) continue;
+      if (typeof entry.message.text !== "string" || entry.message.text.length === 0) continue;
+      updates.push({ updateId: entry.update_id, chatId: String(entry.message.chat.id), fromUserId: String(entry.message.from.id), text: entry.message.text });
+    }
+    return { ok: true, updates };
   }
 
   private async request(
