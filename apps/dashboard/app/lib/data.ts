@@ -2,7 +2,8 @@ import "server-only";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { applyStoredSettings, browserBindingFingerprint, loadConfig } from "@cenblu/config";
-import { prisma, SettingsRepository } from "@cenblu/database";
+import { NotificationOutboxRepository, prisma, SettingsRepository } from "@cenblu/database";
+import { NotificationStatusService, TelegramTransport } from "@cenblu/notifications";
 import { browserName, discoverInstalledChromiumBrowsers } from "@cenblu/publisher";
 
 export async function getOverview() {
@@ -119,6 +120,7 @@ export async function getSettings() {
     notificationsEnabled: stored.NOTIFICATIONS_ENABLED ?? "false",
     telegramChatId: stored.TELEGRAM_CHAT_ID ?? "",
     telegramTokenConfigured: Boolean(config.telegramBotToken),
+    notificationStatus: await new NotificationStatusService(config.telegramBotToken ? new TelegramTransport(config.telegramBotToken) : null, new NotificationOutboxRepository(prisma)).withChat(stored.TELEGRAM_CHAT_ID ?? ""),
     repositoryRoot: config.repositoryRoot,
     installedBrowsers,
     identities: identityCards,

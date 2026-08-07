@@ -40,6 +40,8 @@
     "dashboard:routes:smoke": "pnpm --filter @cenblu/dashboard build && cross-env DATABASE_URL=file:../../../storage/temp/cenblu-dashboard-routes-smoke.db prisma migrate deploy --schema packages/database/prisma/schema.prisma && cross-env DATABASE_URL=file:../../../storage/temp/cenblu-dashboard-routes-smoke.db tsx tests/dashboard.routes.smoke.ts",
     "storage:audit": "tsx workers/maintenance.worker.ts audit",
     "storage:clean": "tsx workers/maintenance.worker.ts clean-temp",
+    "notify:status": "tsx workers/notify.worker.ts status",
+    "notify:test": "tsx workers/notify.worker.ts test",
     "db:backup": "tsx workers/maintenance.worker.ts backup",
     "config:export": "tsx workers/config.worker.ts export",
     "config:import": "tsx workers/config.worker.ts import",

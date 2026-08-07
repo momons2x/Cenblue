@@ -76,4 +76,21 @@ export class NotificationOutboxRepository {
     const deleted = await this.client.notificationOutbox.deleteMany({ where: { status: "SENT", createdAt: { lt: olderThan } } });
     return deleted.count;
   }
+
+  async statusSummary(): Promise<{ pending: number; sending: number; sent: number; failed: number; dead: number }> {
+    const groups = await this.client.notificationOutbox.groupBy({ by: ["status"], _count: { _all: true } });
+    const counts: Record<string, number> = {};
+    for (const group of groups) counts[group.status] = group._count._all;
+    return { pending: counts.PENDING ?? 0, sending: counts.SENDING ?? 0, sent: counts.SENT ?? 0, failed: counts.FAILED ?? 0, dead: counts.DEAD ?? 0 };
+  }
+
+  async latestDelivery(): Promise<{ sentAt: Date } | null> {
+    const record = await this.client.notificationOutbox.findFirst({ where: { status: "SENT" }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true } });
+    return record ? { sentAt: record.updatedAt } : null;
+  }
+
+  async latestFailure(): Promise<{ failedAt: Date; error: string | null } | null> {
+    const record = await this.client.notificationOutbox.findFirst({ where: { status: { in: ["FAILED", "DEAD"] } }, orderBy: { updatedAt: "desc" }, select: { updatedAt: true, lastError: true } });
+    return record ? { failedAt: record.updatedAt, error: record.lastError } : null;
+  }
 }

@@ -28,6 +28,7 @@ The project intends to follow semantic versioning once release automation is est
 - Automatic pre-migration database snapshots from `pnpm db:migrate`.
 - Test coverage reporting with baseline thresholds via `pnpm test:coverage`.
 - Telegram notifications for publish failures that need attention, with deduplication, retry backoff, an outbox driven by the dashboard loop, and a test-message action in Settings.
+- Telegram verification and status: bot-token and chat checks via `getMe`/`getChat`, a live outbox status block in Settings, synchronous test delivery, and `pnpm notify:status` / `pnpm notify:test` CLI commands.
 
 ### Changed
 

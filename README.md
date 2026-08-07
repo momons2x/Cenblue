@@ -211,7 +211,14 @@ Cenblue can send Telegram alerts when a publish job fails and needs attention. S
 
 1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
 2. Set `TELEGRAM_BOT_TOKEN` in the local `.env` and restart the dashboard. The token never enters the database or portable exports.
-3. Under **Settings → Notifications**, enable alerts and set your Telegram chat ID (the number in a chat link such as `t.me/<user>` or via `@userinfobot`). Use **Send test message** to verify delivery.
+3. Under **Settings → Notifications**, enable alerts and set your Telegram chat ID (the number in a chat link such as `t.me/<user>` or via `@userinfobot`).
+
+Verification and status:
+
+- **Verify connection** (Settings) checks the bot token with the Telegram `getMe` call and confirms the chat is reachable.
+- **Send test message** (Settings) delivers a message synchronously and reports the real result instead of just queuing it.
+- The Notifications panel shows live status: bot token validity, chat reachability, outbox counts (pending/sending/sent/dead), and the last delivery time or error.
+- From the terminal: `pnpm notify:status` prints the same report (and exits non-zero on failure), while `pnpm notify:test` sends a synchronous test message.
 
 Enabled alerts notify on publish failures, marking whether the job waits for manual review or will retry automatically. Repeated failures for the same job are deduplicated, and delivery is retried with backoff. The dashboard checks the outbox every 15 seconds, so notifications follow the dashboard process; keep it running to deliver alerts.
 
@@ -232,6 +239,8 @@ Enabled alerts notify on publish failures, marking whether the job waits for man
 | `pnpm db:backup` | Create a database-only snapshot |
 | `pnpm storage:audit` | Verify local media paths, sizes, and checksums |
 | `pnpm storage:clean` | Remove stale partial download files |
+| `pnpm notify:status` | Print Telegram notification status |
+| `pnpm notify:test` | Send a synchronous Telegram test message |
 
 ## Database Snapshots
 

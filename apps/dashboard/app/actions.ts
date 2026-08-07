@@ -11,7 +11,7 @@ import { applyStoredSettings, browserBindingFingerprint, browserIds, loadConfig 
 import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, NotificationOutboxRepository, OperationalEventRepository, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
-import { NotificationEmitter } from "@cenblu/notifications";
+import { NotificationEmitter, TelegramTransport } from "@cenblu/notifications";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
 import { discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChromiumProfile, PublishService, resolveCaption, validateCaption, validateChromiumExecutable, XPlaywrightPublisher } from "@cenblu/publisher";
 import { combineExclusiveLeases, ResourceBusyError } from "@cenblu/shared/lease";
@@ -943,13 +943,41 @@ export async function sendTestNotification() {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   const stored = await new SettingsRepository(prisma).getAll();
   if (!config.telegramBotToken) throw new Error("Add TELEGRAM_BOT_TOKEN to .env to send a test message.");
-  if (stored.NOTIFICATIONS_ENABLED !== "true") throw new Error("Enable notifications before sending a test message.");
   const chatId = stored.TELEGRAM_CHAT_ID;
   if (!chatId) throw new Error("Set the Telegram chat ID before sending a test message.");
-  const emitter = new NotificationEmitter(new OperationalEventRepository(prisma), new NotificationOutboxRepository(prisma));
-  await emitter.sendTestMessage({ enabled: true, chatId });
+  const transport = new TelegramTransport(config.telegramBotToken);
+  const result = await transport.send(chatId, "Cenblue test message — notifications are working.");
   refresh("/settings");
-  redirect("/settings?notificationTest=queued");
+  if (result.ok) redirect("/settings?notificationTest=delivered");
+  redirect(`/settings?notificationTest=error&notificationTestError=${encodeURIComponent(result.error ?? "The test message could not be delivered.")}`);
+}
+
+export async function verifyNotificationConnection() {
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const stored = await new SettingsRepository(prisma).getAll();
+  if (!config.telegramBotToken) throw new Error("Add TELEGRAM_BOT_TOKEN to .env before verifying the connection.");
+  const transport = new TelegramTransport(config.telegramBotToken);
+  const bot = await transport.getMe();
+  if (!bot.ok) {
+    refresh("/settings");
+    redirect(`/settings?notificationVerify=tokenError&notificationVerifyError=${encodeURIComponent(bot.error ?? "The bot token could not be validated.")}`);
+  }
+  const query = new URLSearchParams({ notificationVerify: "ok", botUsername: bot.username ?? "", botName: bot.name ?? "" });
+  const chatId = stored.TELEGRAM_CHAT_ID;
+  if (chatId) {
+    const chat = await transport.getChat(chatId);
+    if (chat.ok) {
+      query.set("chatTitle", chat.title ?? "");
+      query.set("notificationVerify", "all");
+    } else {
+      query.set("chatError", encodeURIComponent(chat.error ?? "The chat ID could not be validated."));
+      query.set("notificationVerify", "chatError");
+    }
+  } else {
+    query.set("notificationVerify", "noChat");
+  }
+  refresh("/settings");
+  redirect(`/settings?${query}`);
 }
 
 export async function publishManualPost(formData: FormData) {

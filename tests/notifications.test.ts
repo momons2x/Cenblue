@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { NotificationEmitter, NotificationDispatcher, TelegramTransport, type NotificationTransport, type TelegramSendResult } from "@cenblu/notifications";
+import { NotificationEmitter, NotificationDispatcher, NotificationStatusService, TelegramTransport, type NotificationTransport, type TelegramSendResult } from "@cenblu/notifications";
 import { NotificationOutboxRepository, OperationalEventRepository, prisma } from "@cenblu/database";
 
 beforeEach(async () => {
@@ -153,5 +153,60 @@ describe("telegram transport", () => {
     const result = await transport.send("123", "hi");
     expect(result.ok).toBe(false);
     expect(result.error).toBeTruthy();
+  });
+
+  it("validates the bot token with getMe", async () => {
+    const transport = new TelegramTransport("good-token", async () => new Response(JSON.stringify({ ok: true, result: { username: "cenblu_bot", first_name: "Cenblue" } }), { status: 200 }));
+    expect(await transport.getMe()).toEqual({ ok: true, username: "cenblu_bot", name: "Cenblue" });
+    const invalid = new TelegramTransport("bad-token", async () => new Response(JSON.stringify({ ok: false, description: "Unauthorized" }), { status: 401 }));
+    const result = await invalid.getMe();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/401/);
+  });
+
+  it("validates the chat with getChat", async () => {
+    const transport = new TelegramTransport("token", async () => new Response(JSON.stringify({ ok: true, result: { title: "My Channel" } }), { status: 200 }));
+    expect(await transport.getChat("123")).toEqual({ ok: true, title: "My Channel" });
+    const missing = new TelegramTransport("token", async () => new Response(JSON.stringify({ ok: false, description: "chat not found" }), { status: 400 }));
+    const result = await missing.getChat("999");
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("chat not found");
+  });
+});
+
+describe("notification status", () => {
+  it("reports outbox counts, last delivery, and last error", async () => {
+    const outbox = new NotificationOutboxRepository(prisma);
+    await outbox.enqueue({ channel: "telegram", recipient: "123", text: "one" });
+    const claimed = await outbox.claimNext(new Date(), new Date(0));
+    await outbox.complete(claimed!.id, claimed!.claimToken!);
+    await outbox.enqueue({ channel: "telegram", recipient: "123", text: "two" });
+    const claimedTwo = await outbox.claimNext(new Date(), new Date(0));
+    await outbox.fail(claimedTwo!.id, claimedTwo!.claimToken!, "boom", null, true);
+
+    const service = new NotificationStatusService(null, outbox);
+    const report = await service.status();
+    expect(report.tokenConfigured).toBe(false);
+    expect(report.outbox).toMatchObject({ pending: 0, sent: 1, dead: 1 });
+    expect(report.lastDeliveredAt).toBeTruthy();
+    expect(report.lastError).toBe("boom");
+  });
+
+  it("resolves bot and chat details through the transport", async () => {
+    const outbox = new NotificationOutboxRepository(prisma);
+    let calls = 0;
+    const transport = new TelegramTransport("token", async () => {
+      calls += 1;
+      return calls === 1
+        ? new Response(JSON.stringify({ ok: true, result: { username: "cenblu_bot", first_name: "Cenblue" } }), { status: 200 })
+        : new Response(JSON.stringify({ ok: true, result: { title: "My Channel" } }), { status: 200 });
+    });
+    const service = new NotificationStatusService(transport, outbox);
+    const report = await service.withChat("123");
+    expect(report.tokenValid).toBe(true);
+    expect(report.botUsername).toBe("cenblu_bot");
+    expect(report.chatReachable).toBe(true);
+    expect(report.chatTitle).toBe("My Channel");
+    expect(calls).toBe(2);
   });
 });
