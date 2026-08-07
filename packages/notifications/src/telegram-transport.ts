@@ -45,7 +45,7 @@ export class TelegramTransport implements NotificationTransport {
   async getUpdates(offset?: number, timeoutSeconds = 25): Promise<{ ok: boolean; updates: TelegramUpdate[]; error?: string }> {
     const query: Record<string, string> = { timeout: String(timeoutSeconds) };
     if (offset !== undefined) query.offset = String(offset);
-    const response = await this.request("getUpdates", { method: "GET", query });
+    const response = await this.request("getUpdates", { method: "GET", query }, (timeoutSeconds + 2) * 1_000);
     if (!response.ok) return { ok: false, updates: [], error: response.error };
     const raw = response.result as Array<{ update_id: number; message?: { chat?: { id?: number }; from?: { id?: number }; text?: string } }> | undefined;
     if (!Array.isArray(raw)) return { ok: true, updates: [] };
@@ -61,9 +61,10 @@ export class TelegramTransport implements NotificationTransport {
   private async request(
     methodName: string,
     options: { method: "GET" | "POST"; body?: string; query?: Record<string, string> },
+    timeoutMs = this.timeoutMs,
   ): Promise<{ ok: boolean; retryAfterSeconds?: number; error?: string; result?: unknown }> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const query = options.query ? `?${new URLSearchParams(options.query)}` : "";
     try {
       const response = await this.fetchImplementation(`https://api.telegram.org/bot${this.botToken}/${methodName}${query}`, {
@@ -88,6 +89,7 @@ export class TelegramTransport implements NotificationTransport {
       const result = body && typeof body === "object" && "result" in body ? body.result : undefined;
       return { ok: true, result };
     } catch (error) {
+      if (controller.signal.aborted) return { ok: true, result: undefined };
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     } finally {
       clearTimeout(timer);

@@ -265,6 +265,18 @@ describe("telegram transport", () => {
     expect(result.ok).toBe(true);
     expect(result.updates).toEqual([]);
   });
+
+  it("treats a poll timeout abort as no updates instead of an error", async () => {
+    const transport = new TelegramTransport("token", async (_url, init) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve()));
+      throw new DOMException("This operation was aborted", "AbortError");
+    }, 1_000);
+    const result = await transport.getUpdates(0, 0);
+    expect(result.ok).toBe(true);
+    expect(result.updates).toEqual([]);
+    expect(result.error).toBeUndefined();
+  });
 });
 
 describe("notification status", () => {
