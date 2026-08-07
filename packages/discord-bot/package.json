@@ -1,0 +1,13 @@
+{
+  "name": "@cenblu/discord-bot",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@cenblu/database": "workspace:*",
+    "@cenblu/notifications": "workspace:*",
+    "discord.js": "^14.27.0",
+    "pino": "10.3.1"
+  }
+}

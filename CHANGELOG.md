@@ -29,6 +29,7 @@ The project intends to follow semantic versioning once release automation is est
 - Test coverage reporting with baseline thresholds via `pnpm test:coverage`.
 - Telegram notifications for publish failures that need attention, with deduplication, retry backoff, an outbox driven by the dashboard loop, and a test-message action in Settings.
 - Telegram verification and status: bot-token and chat checks via `getMe`/`getChat`, a live outbox status block in Settings, synchronous test delivery, and `pnpm notify:status` / `pnpm notify:test` CLI commands.
+- A Discord status bot (`@cenblu/discord-bot`) that answers owner-only slash commands in a direct message: `/status`, `/pipeline`, `/test`, and `/help`, started with the dashboard or standalone via `pnpm discord-bot`.
 
 ### Changed
 

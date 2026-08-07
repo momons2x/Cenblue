@@ -13,6 +13,7 @@
     "@cenblu/collector": "workspace:*",
     "@cenblu/config": "workspace:*",
     "@cenblu/database": "workspace:*",
+    "@cenblu/discord-bot": "workspace:*",
     "@cenblu/downloader": "workspace:*",
     "@cenblu/notifications": "workspace:*",
     "@cenblu/operations": "workspace:*",

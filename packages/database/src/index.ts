@@ -13,6 +13,7 @@ export { SettingsRepository } from "./settings.repository";
 export { BrowserIdentityRepository, identityFingerprint, identityLeaseName, type IdentityRole } from "./browser-identity.repository";
 export { CollectionRunRepository } from "./collection-run.repository";
 export { RuntimeStatusRepository } from "./runtime-status.repository";
+export { PipelineStatusRepository, type PipelineStatus } from "./pipeline-status.repository";
 export { OperationalEventRepository, type OperationalEventInput } from "./operational-event.repository";
 export { NotificationOutboxRepository, type ClaimedNotification, type NotificationEnqueueInput } from "./notification-outbox.repository";
 export { isTransientDatabaseError, withDatabaseRetry } from "./retry";

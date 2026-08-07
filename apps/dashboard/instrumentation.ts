@@ -4,4 +4,6 @@ export async function register() {
   startAutomaticPublisher();
   const { startNotificationDispatcher } = await import("./app/lib/notification-dispatcher");
   startNotificationDispatcher();
+  const { startDiscordBot } = await import("./app/lib/discord-bot");
+  await startDiscordBot();
 }

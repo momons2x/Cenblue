@@ -222,6 +222,21 @@ Verification and status:
 
 Enabled alerts notify on publish failures, marking whether the job waits for manual review or will retry automatically. Repeated failures for the same job are deduplicated, and delivery is retried with backoff. The dashboard checks the outbox every 15 seconds, so notifications follow the dashboard process; keep it running to deliver alerts.
 
+## Discord Commands
+
+A lightweight Discord bot can answer status commands in your direct message. Setup:
+
+1. Create an application at [discord.com/developers/applications](https://discord.com/developers/applications), open **Bot**, copy the token, and ensure the bot can be DMed.
+2. Set `DISCORD_BOT_TOKEN` and `DISCORD_OWNER_ID` in the local `.env` (enable Developer Mode in Discord, right-click your user, **Copy User ID** for the owner ID). Restart the dashboard.
+3. The bot connects when the dashboard runs (or start it standalone with `pnpm discord-bot`), then send commands in your DM with the bot:
+
+- `/status` — notification status: Telegram token/chat validity, outbox counts, last delivery/error.
+- `/pipeline` — pipeline summary: enabled sources, pending/failed downloads, scheduled/attention publishes, published today/total, worker heartbeats.
+- `/test` — send a test notification through the configured Telegram channel.
+- `/help` — list commands.
+
+Commands are accepted only from `DISCORD_OWNER_ID` in a direct message. The bot token stays in `.env` and never enters the database or portable exports.
+
 ## Commands
 
 | Command | Purpose |
@@ -241,6 +256,7 @@ Enabled alerts notify on publish failures, marking whether the job waits for man
 | `pnpm storage:clean` | Remove stale partial download files |
 | `pnpm notify:status` | Print Telegram notification status |
 | `pnpm notify:test` | Send a synchronous Telegram test message |
+| `pnpm discord-bot` | Run the Discord status bot standalone |
 
 ## Database Snapshots
 
@@ -305,7 +321,7 @@ Prefer PATH-based values (`yt-dlp`, `ffmpeg`, `ffprobe`) in `.env` so future too
 | Directory | Responsibility |
 | --- | --- |
 | `apps/dashboard` | Next.js dashboard, Server Actions, APIs, automatic publisher loop, and `/api/health` |
-| `workers` | Collector, downloader, publisher, pipeline, maintenance, setup, and migration CLIs |
+| `workers` | Collector, downloader, publisher, pipeline, maintenance, setup, migration, notify, and discord-bot CLIs |
 | `packages/config` | Environment validation and protected path resolution |
 | `packages/database` | Prisma repositories, leases, settings, and SQLite migrations |
 | `packages/collector` | X collection and normalization |
@@ -313,6 +329,8 @@ Prefer PATH-based values (`yt-dlp`, `ffmpeg`, `ffprobe`) in `.env` so future too
 | `packages/publisher` | Captioning and Playwright publication |
 | `packages/scheduler` | Pipeline cadence and review scheduling |
 | `packages/operations` | Backup, audit, deletion, purge, and reset operations |
+| `packages/notifications` | Telegram delivery, outbox dispatch, and notification status |
+| `packages/discord-bot` | Owner-only Discord status commands via slash commands |
 | `packages/shared` | Logs, diagnostics, leases, and shared contracts |
 
 See [docs/architecture.md](docs/architecture.md), [docs/operations.md](docs/operations.md), and the tracked [production readiness and product roadmap](PRODUCTION_READINESS_PLAN.md).
