@@ -104,6 +104,40 @@ describe("notification emitter", () => {
     ]);
     expect(await prisma.operationalEvent.count()).toBe(1);
   });
+
+  it("enqueues a published-post notification to every configured channel", async () => {
+    const events = new OperationalEventRepository(prisma);
+    const outbox = new NotificationOutboxRepository(prisma);
+    const emitter = new NotificationEmitter(events, outbox, undefined, async () => "Publisher One");
+    const emitted = await emitter.emitPublishedPost({ jobId: "job-7", platformPostId: "90007", publisherIdentityId: "pub-3", platformUrl: "https://x.com/a/status/90007" }, { enabled: true, channels: { telegram: "123", discord: "456" } });
+    expect(emitted).toBe(true);
+    expect(await outbox.countPending()).toBe(2);
+    const record = await prisma.operationalEvent.findFirstOrThrow();
+    expect(record.type).toBe("publish.success");
+    expect(record.severity).toBe("INFO");
+    expect(record.message).toContain("Published X post 90007 via Publisher One");
+    expect(record.message).toContain("https://x.com/a/status/90007");
+  });
+
+  it("dedupes repeated published-post notifications for the same job", async () => {
+    const events = new OperationalEventRepository(prisma);
+    const outbox = new NotificationOutboxRepository(prisma);
+    const emitter = new NotificationEmitter(events, outbox, 60 * 60_000);
+    const context = { jobId: "job-8", platformPostId: "90008", publisherIdentityId: null, platformUrl: null };
+    expect(await emitter.emitPublishedPost(context, { enabled: true, channels: { telegram: "123" } })).toBe(true);
+    expect(await emitter.emitPublishedPost(context, { enabled: true, channels: { telegram: "123" } })).toBe(false);
+    expect(await prisma.operationalEvent.count()).toBe(1);
+    expect(await outbox.countPending()).toBe(1);
+  });
+
+  it("does nothing for a published-post notification when disabled", async () => {
+    const events = new OperationalEventRepository(prisma);
+    const outbox = new NotificationOutboxRepository(prisma);
+    const emitter = new NotificationEmitter(events, outbox);
+    expect(await emitter.emitPublishedPost({ jobId: "job-9", platformPostId: "90009", publisherIdentityId: null, platformUrl: null }, { enabled: false, channels: { telegram: "123" } })).toBe(false);
+    expect(await prisma.operationalEvent.count()).toBe(0);
+    expect(await outbox.countPending()).toBe(0);
+  });
 });
 
 describe("notification dispatcher", () => {

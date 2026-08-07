@@ -14,6 +14,13 @@ export type PublishFailureNotification = {
   retryable: boolean;
 };
 
+export type PublishSuccessNotification = {
+  jobId: string;
+  platformPostId: string;
+  publisherIdentityId: string | null;
+  platformUrl: string | null;
+};
+
 export class PublishService {
   constructor(
     private readonly repository: PublishRepository,
@@ -24,6 +31,7 @@ export class PublishService {
     private readonly maxAttempts = 3,
     private readonly publisherIdentityId?: string,
     private readonly onPublishFailure?: (failure: PublishFailureNotification) => Promise<void> | void,
+    private readonly onPublishSuccess?: (success: PublishSuccessNotification) => Promise<void> | void,
   ) {}
 
   async processNext(): Promise<boolean> {
@@ -86,6 +94,11 @@ export class PublishService {
       if (heartbeatFailure) throw heartbeatFailure;
       if (!await this.repository.complete(job.id, claimToken, result, new Date())) throw new PublisherError("LEASE_LOST", "Publish completed remotely after its job claim was lost; reconcile the account manually", false, true);
       this.logger.info({ operation: "publisher.complete", jobId: job.id, postId: job.sourcePost.platformPostId, attemptCount: job.attemptCount, publishedPostId: result.platformPostId }, "Publish completed");
+      try {
+        await this.onPublishSuccess?.({ jobId: job.id, platformPostId: job.sourcePost.platformPostId, publisherIdentityId: this.publisherIdentityId ?? null, platformUrl: result.platformUrl ?? null });
+      } catch (notificationError) {
+        this.logger.warn({ operation: "publisher.notification.failed", jobId: job.id, error: notificationError instanceof Error ? notificationError.message : String(notificationError) }, "Publish success notification could not be emitted");
+      }
     } catch (error) {
       const publisherError = error instanceof PublisherError
         ? error

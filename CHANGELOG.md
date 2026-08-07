@@ -30,7 +30,9 @@ The project intends to follow semantic versioning once release automation is est
 - Telegram notifications for publish failures that need attention, with deduplication, retry backoff, an outbox driven by the dashboard loop, and a test-message action in Settings.
 - Telegram verification and status: bot-token and chat checks via `getMe`/`getChat`, a live outbox status block in Settings, synchronous test delivery, and `pnpm notify:status` / `pnpm notify:test` CLI commands.
 - A Discord status bot (`@cenblu/discord-bot`) that answers owner-only slash commands in a direct message: `/status`, `/pipeline`, `/test`, and `/help`, started with the dashboard or standalone via `pnpm discord-bot`.
-- Discord direct-message alerts: publish-failure notifications can be delivered to the owner's DM through the bot, enabled and tested from a Discord panel in Settings alongside Telegram.
+- Discord direct-message alerts: publish notifications can be delivered to the owner's DM through the bot, enabled and tested from a Discord panel in Settings alongside Telegram.
+- Publish-success notifications: successful publishes now alert all configured channels, with a **Send test publish notification** button on the Published page to verify the chain.
+- Discord bot commands moved from slash to `!` prefix commands (`!status`, `!pipeline`, `!test`, `!help`), with an explicit online presence so the bot shows as online in Discord.
 
 ### Changed
 

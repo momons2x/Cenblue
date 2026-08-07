@@ -1,5 +1,5 @@
-import { confirmPublishedAndRemoveMedia, recoverIncorrectPublishedPost } from "../actions";
-import { ActionForm, ConfirmSubmitButton, PostPerformanceReport } from "../controls";
+import { confirmPublishedAndRemoveMedia, recoverIncorrectPublishedPost, simulatePublishedPost } from "../actions";
+import { ActionForm, ConfirmSubmitButton, PostPerformanceReport, SubmitButton } from "../controls";
 import { ExpandableText } from "../expandable-text";
 import { getPublished, getSettings } from "../lib/data";
 import { formatInTimeZone } from "../lib/schedule";
@@ -8,15 +8,17 @@ import type { PostMetrics } from "@cenblu/collector";
 
 export const dynamic = "force-dynamic";
 
-type PublishedParams = { performance?: string; performanceError?: string; actionError?: string; fetchedAt?: string; replies?: string; reposts?: string; likes?: string; bookmarks?: string; views?: string };
+type PublishedParams = { performance?: string; performanceError?: string; actionError?: string; fetchedAt?: string; replies?: string; reposts?: string; likes?: string; bookmarks?: string; views?: string; publishTest?: string };
 
 export default async function PublishedPage({ searchParams }: { searchParams: Promise<PublishedParams> }) {
   const params = await searchParams;
   const [records, settings] = await Promise.all([getPublished(), getSettings()]);
   return <Shell title="Published" eyebrow="Cenblue / output archive">
     {params.actionError && <div className="toast error" role="alert">{params.actionError}</div>}
+    {params.publishTest === "queued" && <div className="toast bookmark-success" role="status">Test publish notification queued for delivery.</div>}
+    {params.publishTest === "error" && <div className="toast error" role="alert">No notification channel is configured. Enable Telegram or Discord notifications in Settings first.</div>}
     <section className="panel">
-      <div className="panel-head"><div><p className="eyebrow">Publication history</p><h3>{records.length} published post{records.length === 1 ? "" : "s"}</h3></div></div>
+      <div className="panel-head"><div><p className="eyebrow">Publication history</p><h3>{records.length} published post{records.length === 1 ? "" : "s"}</h3></div><div className="actions"><ActionForm action={simulatePublishedPost}><SubmitButton className="small-button" pending="Sending…">Send test publish notification</SubmitButton></ActionForm></div></div>
       {records.length === 0 ? <Empty>Successful publications will be archived here.</Empty> : <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,19rem),1fr))] gap-4">{records.map((record) => {
         const asset = record.publishJob.mediaAsset;
         const performance = params.performance === record.id ? { error: params.performanceError, fetchedAt: params.fetchedAt, metrics: params.performanceError ? undefined : ({ replies: parseMetric(params.replies), reposts: parseMetric(params.reposts), likes: parseMetric(params.likes), bookmarks: parseMetric(params.bookmarks), views: parseMetric(params.views) } satisfies PostMetrics) } : undefined;

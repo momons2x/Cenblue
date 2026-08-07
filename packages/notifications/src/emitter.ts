@@ -17,6 +17,13 @@ export type PublishFailureContext = {
   retryable: boolean;
 };
 
+export type PublishedPostContext = {
+  jobId: string;
+  platformPostId: string;
+  publisherIdentityId: string | null;
+  platformUrl: string | null;
+};
+
 export class NotificationEmitter {
   constructor(
     private readonly events: OperationalEventRepository,
@@ -40,6 +47,32 @@ export class NotificationEmitter {
     await this.events.insert({
       type: "publish.failed",
       severity,
+      component: "publisher",
+      message,
+      meta: JSON.stringify({ jobId: context.jobId, platformPostId: context.platformPostId }),
+      dedupeKey,
+      dedupeUntil: new Date(now.getTime() + this.dedupeWindowMs),
+    });
+    for (const [channel, recipient] of recipients) {
+      await this.outbox.enqueue({ channel, recipient, text: message }, now);
+    }
+    return true;
+  }
+
+  async emitPublishedPost(context: PublishedPostContext, settings: NotificationSettings, now = new Date()): Promise<boolean> {
+    if (!settings.enabled) return false;
+    const recipients = Object.entries(settings.channels).filter((entry): entry is [NotificationChannel, string] => Boolean(entry[1]));
+    if (recipients.length === 0) return false;
+    const dedupeKey = `publish-success:${context.jobId}`;
+    if (await this.events.hasRecentDedupe(dedupeKey, now)) return false;
+    const label = context.publisherIdentityId
+      ? (await this.resolvePublisherLabel?.(context.publisherIdentityId)) ?? "unknown publisher"
+      : "unassigned publisher";
+    const link = context.platformUrl ? `\n${context.platformUrl}` : "";
+    const message = `Published X post ${context.platformPostId} via ${label}.${link}`;
+    await this.events.insert({
+      type: "publish.success",
+      severity: "INFO",
       component: "publisher",
       message,
       meta: JSON.stringify({ jobId: context.jobId, platformPostId: context.platformPostId }),

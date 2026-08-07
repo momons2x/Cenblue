@@ -442,6 +442,19 @@ async function buildNotificationEmitter(config: ReturnType<typeof applyStoredSet
   return null;
 }
 
+async function notificationChannelMap(config: ReturnType<typeof applyStoredSettings>): Promise<Partial<Record<NotificationChannel, string>>> {
+  const stored = await new SettingsRepository(prisma).getAll();
+  const channels: Partial<Record<NotificationChannel, string>> = {};
+  if (config.telegramBotToken && stored.TELEGRAM_CHAT_ID) channels.telegram = stored.TELEGRAM_CHAT_ID;
+  if (config.discordBotToken && config.discordOwnerId && stored.NOTIFICATIONS_DISCORD_ENABLED === "true") channels.discord = config.discordOwnerId;
+  return channels;
+}
+
+async function notificationSettings(config: ReturnType<typeof applyStoredSettings>): Promise<{ enabled: boolean; channels: Partial<Record<NotificationChannel, string>> }> {
+  const stored = await new SettingsRepository(prisma).getAll();
+  return { enabled: stored.NOTIFICATIONS_ENABLED === "true", channels: await notificationChannelMap(config) };
+}
+
 async function dashboardPublisher(publisherIdentityId: string) {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   const identity = await prisma.browserIdentity.findFirst({ where: { id: publisherIdentityId, role: "PUBLISHER", enabled: true } });
@@ -459,13 +472,8 @@ async function dashboardPublisher(publisherIdentityId: string) {
     config.publishAllowEmptyCaption,
     3,
     identity.id,
-    emitter ? async (failure) => {
-      const stored = await new SettingsRepository(prisma).getAll();
-      const channels: Partial<Record<NotificationChannel, string>> = {};
-      if (config.telegramBotToken && stored.TELEGRAM_CHAT_ID) channels.telegram = stored.TELEGRAM_CHAT_ID;
-      if (config.discordBotToken && config.discordOwnerId && stored.NOTIFICATIONS_DISCORD_ENABLED === "true") channels.discord = config.discordOwnerId;
-      await emitter.emitPublishFailure({ jobId: failure.jobId, platformPostId: failure.platformPostId, publisherIdentityId: failure.publisherIdentityId, error: failure.error, attemptCount: failure.attemptCount, manualAttention: failure.manualAttention, retryable: failure.retryable }, { enabled: stored.NOTIFICATIONS_ENABLED === "true", channels });
-    } : undefined,
+    emitter ? async (failure) => { await emitter.emitPublishFailure({ jobId: failure.jobId, platformPostId: failure.platformPostId, publisherIdentityId: failure.publisherIdentityId, error: failure.error, attemptCount: failure.attemptCount, manualAttention: failure.manualAttention, retryable: failure.retryable }, await notificationSettings(config)); } : undefined,
+    emitter ? async (success) => { await emitter.emitPublishedPost({ jobId: success.jobId, platformPostId: success.platformPostId, publisherIdentityId: success.publisherIdentityId, platformUrl: success.platformUrl }, await notificationSettings(config)); } : undefined,
   );
 }
 
@@ -1001,6 +1009,21 @@ export async function verifyNotificationConnection() {
   }
   refresh("/settings");
   redirect(`/settings?${query}`);
+}
+
+export async function simulatePublishedPost() {
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const emitter = await buildNotificationEmitter(config);
+  const settings = await notificationSettings(config);
+  const emitted = emitter ? await emitter.emitPublishedPost({
+    jobId: `simulated-${Date.now()}`,
+    platformPostId: `SIMULATED-${Date.now()}`,
+    publisherIdentityId: null,
+    platformUrl: null,
+  }, settings) : false;
+  refresh("/published");
+  if (emitted) redirect("/published?publishTest=queued");
+  redirect("/published?publishTest=error");
 }
 
 export async function publishManualPost(formData: FormData) {

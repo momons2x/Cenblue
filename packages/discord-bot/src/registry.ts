@@ -1,11 +1,11 @@
 import type { Client } from "discord.js";
 
-let activeClient: Client | null = null;
+const globalState = globalThis as typeof globalThis & { __cenbluDiscordActiveClient?: Client | null };
 
 export function setActiveDiscordClient(client: Client | null): void {
-  activeClient = client;
+  globalState.__cenbluDiscordActiveClient = client;
 }
 
 export function getActiveDiscordClient(): Client | null {
-  return activeClient;
+  return globalState.__cenbluDiscordActiveClient ?? null;
 }
