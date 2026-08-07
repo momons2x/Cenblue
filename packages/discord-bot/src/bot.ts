@@ -2,6 +2,7 @@ import { Client, GatewayIntentBits, SlashCommandBuilder, type ChatInputCommandIn
 import type { Logger } from "pino";
 import { NotificationOutboxRepository, PipelineStatusRepository, prisma } from "@cenblu/database";
 import { NotificationStatusService, TelegramTransport } from "@cenblu/notifications";
+import { setActiveDiscordClient } from "./registry";
 
 export type DiscordBotOptions = {
   token: string;
@@ -26,6 +27,7 @@ export class DiscordBot {
 
   constructor(private readonly options: DiscordBotOptions) {
     this.client.once("ready", (client) => {
+      setActiveDiscordClient(client);
       this.options.logger.info({ operation: "discord-bot.ready", user: client.user?.tag }, "Discord bot connected");
     });
     this.client.on("reconnecting", () => this.options.logger.warn({ operation: "discord-bot.reconnecting" }, "Discord bot reconnecting"));
@@ -42,6 +44,7 @@ export class DiscordBot {
   }
 
   async stop(): Promise<void> {
+    setActiveDiscordClient(null);
     await this.client.destroy();
   }
 

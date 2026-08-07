@@ -222,6 +222,8 @@ Verification and status:
 
 Enabled alerts notify on publish failures, marking whether the job waits for manual review or will retry automatically. Repeated failures for the same job are deduplicated, and delivery is retried with backoff. The dashboard checks the outbox every 15 seconds, so notifications follow the dashboard process; keep it running to deliver alerts.
 
+In addition to Telegram, alerts can be delivered to your **Discord DM** through the same outbox. Enable **Settings → Discord → Direct-message alerts**; the bot then DMs `DISCORD_OWNER_ID` on publish failures, and **Send test DM** verifies delivery. Both channels are enabled or disabled independently under the shared master **Notifications** toggle.
+
 ## Discord Commands
 
 A lightweight Discord bot can answer status commands in your direct message. Setup:

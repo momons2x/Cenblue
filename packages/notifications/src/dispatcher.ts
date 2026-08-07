@@ -10,7 +10,7 @@ export type DispatcherConfig = {
 export class NotificationDispatcher {
   constructor(
     private readonly outbox: NotificationOutboxRepository,
-    private readonly transport: NotificationTransport,
+    private readonly transports: Record<string, NotificationTransport>,
     private readonly config: DispatcherConfig,
   ) {}
 
@@ -20,7 +20,12 @@ export class NotificationDispatcher {
     while (true) {
       const item = await this.outbox.claimNext(now, staleBefore);
       if (!item) break;
-      const result = await this.transport.send(item.recipient, item.text);
+      const transport = this.transports[item.channel];
+      if (!transport) {
+        await this.outbox.fail(item.id, item.claimToken, `No transport configured for channel ${item.channel}`, null, true);
+        continue;
+      }
+      const result = await transport.send(item.recipient, item.text);
       if (result.ok) {
         await this.outbox.complete(item.id, item.claimToken, now);
         sent += 1;
@@ -30,7 +35,7 @@ export class NotificationDispatcher {
       const dead = attemptCount >= this.config.maxAttempts;
       const retryAfter = result.retryAfterSeconds ?? this.backoffMs(attemptCount) / 1_000;
       const nextAttemptAt = dead ? null : new Date(now.getTime() + retryAfter * 1_000);
-      await this.outbox.fail(item.id, item.claimToken, result.error ?? "Telegram delivery failed", nextAttemptAt, dead);
+      await this.outbox.fail(item.id, item.claimToken, result.error ?? "Notification delivery failed", nextAttemptAt, dead);
     }
     return sent;
   }

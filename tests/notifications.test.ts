@@ -54,18 +54,18 @@ describe("notification emitter", () => {
     const emitter = new NotificationEmitter(events, outbox);
     const emitted = await emitter.emitPublishFailure({
       jobId: "job-1", platformPostId: "90001", publisherIdentityId: "pub-1", error: "SUBMISSION_FAILED: nope", attemptCount: 1, manualAttention: false, retryable: true,
-    }, { enabled: true, chatId: "123" });
+    }, { enabled: true, channels: { telegram: "123" } });
     expect(emitted).toBe(true);
     expect(await prisma.operationalEvent.count()).toBe(1);
     expect(await outbox.countPending()).toBe(1);
   });
 
-  it("does nothing when disabled or missing chat id", async () => {
+  it("does nothing when disabled or missing recipients", async () => {
     const events = new OperationalEventRepository(prisma);
     const outbox = new NotificationOutboxRepository(prisma);
     const emitter = new NotificationEmitter(events, outbox);
-    await emitter.emitPublishFailure({ jobId: "job-2", platformPostId: "90002", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: false, retryable: false }, { enabled: false, chatId: "123" });
-    await emitter.emitPublishFailure({ jobId: "job-3", platformPostId: "90003", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: false, retryable: false }, { enabled: true, chatId: null });
+    await emitter.emitPublishFailure({ jobId: "job-2", platformPostId: "90002", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: false, retryable: false }, { enabled: false, channels: { telegram: "123" } });
+    await emitter.emitPublishFailure({ jobId: "job-3", platformPostId: "90003", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: false, retryable: false }, { enabled: true, channels: {} });
     expect(await prisma.operationalEvent.count()).toBe(0);
     expect(await outbox.countPending()).toBe(0);
   });
@@ -75,8 +75,8 @@ describe("notification emitter", () => {
     const outbox = new NotificationOutboxRepository(prisma);
     const emitter = new NotificationEmitter(events, outbox, 60 * 60_000);
     const context = { jobId: "job-4", platformPostId: "90004", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: true, retryable: false };
-    expect(await emitter.emitPublishFailure(context, { enabled: true, chatId: "123" })).toBe(true);
-    expect(await emitter.emitPublishFailure(context, { enabled: true, chatId: "123" })).toBe(false);
+    expect(await emitter.emitPublishFailure(context, { enabled: true, channels: { telegram: "123" } })).toBe(true);
+    expect(await emitter.emitPublishFailure(context, { enabled: true, channels: { telegram: "123" } })).toBe(false);
     expect(await prisma.operationalEvent.count()).toBe(1);
     expect(await outbox.countPending()).toBe(1);
   });
@@ -85,10 +85,24 @@ describe("notification emitter", () => {
     const events = new OperationalEventRepository(prisma);
     const outbox = new NotificationOutboxRepository(prisma);
     const emitter = new NotificationEmitter(events, outbox, undefined, async () => "Publisher Two");
-    await emitter.emitPublishFailure({ jobId: "job-5", platformPostId: "90005", publisherIdentityId: "pub-2", error: "x", attemptCount: 2, manualAttention: true, retryable: false }, { enabled: true, chatId: "123" });
+    await emitter.emitPublishFailure({ jobId: "job-5", platformPostId: "90005", publisherIdentityId: "pub-2", error: "x", attemptCount: 2, manualAttention: true, retryable: false }, { enabled: true, channels: { telegram: "123" } });
     const record = await prisma.operationalEvent.findFirstOrThrow();
     expect(record.message).toContain("Publisher Two");
     expect(record.message).toContain("Manual review required");
+  });
+
+  it("enqueues one row per configured channel", async () => {
+    const events = new OperationalEventRepository(prisma);
+    const outbox = new NotificationOutboxRepository(prisma);
+    const emitter = new NotificationEmitter(events, outbox);
+    await emitter.emitPublishFailure({ jobId: "job-6", platformPostId: "90006", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: false, retryable: false }, { enabled: true, channels: { telegram: "123", discord: "456" } });
+    expect(await outbox.countPending()).toBe(2);
+    const rows = await prisma.notificationOutbox.findMany({ orderBy: { channel: "asc" }, select: { channel: true, recipient: true } });
+    expect(rows).toEqual([
+      { channel: "discord", recipient: "456" },
+      { channel: "telegram", recipient: "123" },
+    ]);
+    expect(await prisma.operationalEvent.count()).toBe(1);
   });
 });
 
@@ -104,17 +118,40 @@ describe("notification dispatcher", () => {
     await outbox.enqueue({ channel: "telegram", recipient: "123", text: "one" });
     await outbox.enqueue({ channel: "telegram", recipient: "123", text: "two" });
     const transport = new FakeTransport({ ok: true });
-    const dispatcher = new NotificationDispatcher(outbox, transport, { maxAttempts: 3, maxBackoffMs: 60_000, staleAfterMs: 15 * 60_000 });
+    const dispatcher = new NotificationDispatcher(outbox, { telegram: transport }, { maxAttempts: 3, maxBackoffMs: 60_000, staleAfterMs: 15 * 60_000 });
     expect(await dispatcher.runOnce()).toBe(2);
     expect(transport.calls).toHaveLength(2);
     expect(await outbox.countPending()).toBe(0);
+  });
+
+  it("routes rows to the transport for their channel", async () => {
+    const outbox = new NotificationOutboxRepository(prisma);
+    await outbox.enqueue({ channel: "telegram", recipient: "123", text: "tg" });
+    await outbox.enqueue({ channel: "discord", recipient: "456", text: "dc" });
+    const telegram = new FakeTransport({ ok: true });
+    const discord = new FakeTransport({ ok: true });
+    const dispatcher = new NotificationDispatcher(outbox, { telegram, discord }, { maxAttempts: 3, maxBackoffMs: 60_000, staleAfterMs: 15 * 60_000 });
+    expect(await dispatcher.runOnce()).toBe(2);
+    expect(telegram.calls).toEqual(["123:tg"]);
+    expect(discord.calls).toEqual(["456:dc"]);
+    expect(await outbox.countPending()).toBe(0);
+  });
+
+  it("fails rows whose channel has no transport", async () => {
+    const outbox = new NotificationOutboxRepository(prisma);
+    await outbox.enqueue({ channel: "telegram", recipient: "123", text: "one" });
+    const dispatcher = new NotificationDispatcher(outbox, {}, { maxAttempts: 3, maxBackoffMs: 60_000, staleAfterMs: 15 * 60_000 });
+    expect(await dispatcher.runOnce()).toBe(0);
+    const record = await prisma.notificationOutbox.findFirstOrThrow();
+    expect(record.status).toBe("DEAD");
+    expect(record.lastError).toContain("No transport configured");
   });
 
   it("backs off after a transient failure and retries later", async () => {
     const outbox = new NotificationOutboxRepository(prisma);
     await outbox.enqueue({ channel: "telegram", recipient: "123", text: "never" });
     const transport = new FakeTransport({ ok: false, error: "network" });
-    const dispatcher = new NotificationDispatcher(outbox, transport, { maxAttempts: 2, maxBackoffMs: 60_000, staleAfterMs: 15 * 60_000 });
+    const dispatcher = new NotificationDispatcher(outbox, { telegram: transport }, { maxAttempts: 2, maxBackoffMs: 60_000, staleAfterMs: 15 * 60_000 });
     expect(await dispatcher.runOnce()).toBe(0);
     const record = await prisma.notificationOutbox.findFirstOrThrow();
     expect(record.status).toBe("PENDING");
@@ -126,7 +163,7 @@ describe("notification dispatcher", () => {
     const outbox = new NotificationOutboxRepository(prisma);
     await outbox.enqueue({ channel: "telegram", recipient: "123", text: "never" });
     const transport = new FakeTransport({ ok: false, error: "network" });
-    const dispatcher = new NotificationDispatcher(outbox, transport, { maxAttempts: 1, maxBackoffMs: 60_000, staleAfterMs: 15 * 60_000 });
+    const dispatcher = new NotificationDispatcher(outbox, { telegram: transport }, { maxAttempts: 1, maxBackoffMs: 60_000, staleAfterMs: 15 * 60_000 });
     expect(await dispatcher.runOnce()).toBe(0);
     const record = await prisma.notificationOutbox.findFirstOrThrow();
     expect(record.status).toBe("DEAD");

@@ -3,6 +3,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { applyStoredSettings, browserBindingFingerprint, loadConfig } from "@cenblu/config";
 import { NotificationOutboxRepository, prisma, SettingsRepository } from "@cenblu/database";
+import { getActiveDiscordClient } from "@cenblu/discord-bot";
 import { NotificationStatusService, TelegramTransport } from "@cenblu/notifications";
 import { browserName, discoverInstalledChromiumBrowsers } from "@cenblu/publisher";
 
@@ -121,6 +122,11 @@ export async function getSettings() {
     telegramChatId: stored.TELEGRAM_CHAT_ID ?? "",
     telegramTokenConfigured: Boolean(config.telegramBotToken),
     notificationStatus: await new NotificationStatusService(config.telegramBotToken ? new TelegramTransport(config.telegramBotToken) : null, new NotificationOutboxRepository(prisma)).withChat(stored.TELEGRAM_CHAT_ID ?? ""),
+    discordNotificationsEnabled: stored.NOTIFICATIONS_DISCORD_ENABLED ?? "false",
+    discordBotTokenConfigured: Boolean(config.discordBotToken),
+    discordOwnerConfigured: Boolean(config.discordOwnerId),
+    discordOwnerId: config.discordOwnerId ?? "",
+    discordBotConnected: Boolean(getActiveDiscordClient()),
     repositoryRoot: config.repositoryRoot,
     installedBrowsers,
     identities: identityCards,

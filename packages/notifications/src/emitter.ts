@@ -1,8 +1,10 @@
 import type { NotificationOutboxRepository, OperationalEventRepository } from "@cenblu/database";
 
+export type NotificationChannel = "telegram" | "discord";
+
 export type NotificationSettings = {
   enabled: boolean;
-  chatId: string | null;
+  channels: Partial<Record<NotificationChannel, string>>;
 };
 
 export type PublishFailureContext = {
@@ -24,7 +26,9 @@ export class NotificationEmitter {
   ) {}
 
   async emitPublishFailure(context: PublishFailureContext, settings: NotificationSettings, now = new Date()): Promise<boolean> {
-    if (!settings.enabled || !settings.chatId) return false;
+    if (!settings.enabled) return false;
+    const recipients = Object.entries(settings.channels).filter((entry): entry is [NotificationChannel, string] => Boolean(entry[1]));
+    if (recipients.length === 0) return false;
     const dedupeKey = `publish-failure:${context.jobId}`;
     if (await this.events.hasRecentDedupe(dedupeKey, now)) return false;
     const severity = context.manualAttention ? "CRITICAL" : "ERROR";
@@ -42,13 +46,18 @@ export class NotificationEmitter {
       dedupeKey,
       dedupeUntil: new Date(now.getTime() + this.dedupeWindowMs),
     });
-    await this.outbox.enqueue({ channel: "telegram", recipient: settings.chatId, text: message }, now);
+    for (const [channel, recipient] of recipients) {
+      await this.outbox.enqueue({ channel, recipient, text: message }, now);
+    }
     return true;
   }
 
   async sendTestMessage(settings: NotificationSettings, now = new Date()): Promise<boolean> {
-    if (!settings.enabled || !settings.chatId) return false;
-    await this.outbox.enqueue({ channel: "telegram", recipient: settings.chatId, text: "Cenblue test message — notifications are working." }, now);
-    return true;
+    if (!settings.enabled) return false;
+    const recipients = Object.entries(settings.channels).filter((entry): entry is [NotificationChannel, string] => Boolean(entry[1]));
+    for (const [channel, recipient] of recipients) {
+      await this.outbox.enqueue({ channel, recipient, text: "Cenblue test message — notifications are working." }, now);
+    }
+    return recipients.length > 0;
   }
 }

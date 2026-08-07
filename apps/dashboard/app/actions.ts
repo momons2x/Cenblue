@@ -11,7 +11,8 @@ import { applyStoredSettings, browserBindingFingerprint, browserIds, loadConfig 
 import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, NotificationOutboxRepository, OperationalEventRepository, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
-import { NotificationEmitter, TelegramTransport } from "@cenblu/notifications";
+import { NotificationEmitter, TelegramTransport, type NotificationChannel } from "@cenblu/notifications";
+import { DiscordDmTransport } from "@cenblu/discord-bot";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
 import { discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChromiumProfile, PublishService, resolveCaption, validateCaption, validateChromiumExecutable, XPlaywrightPublisher } from "@cenblu/publisher";
 import { combineExclusiveLeases, ResourceBusyError } from "@cenblu/shared/lease";
@@ -429,7 +430,8 @@ async function dashboardDownloader() {
 
 async function buildNotificationEmitter(config: ReturnType<typeof applyStoredSettings>) {
   const settings = await new SettingsRepository(prisma).getAll();
-  if (config.telegramBotToken && settings.NOTIFICATIONS_ENABLED === "true" && settings.TELEGRAM_CHAT_ID) {
+  const hasAnyChannel = (config.telegramBotToken && settings.TELEGRAM_CHAT_ID) || (config.discordBotToken && config.discordOwnerId && settings.NOTIFICATIONS_DISCORD_ENABLED === "true");
+  if (settings.NOTIFICATIONS_ENABLED === "true" && hasAnyChannel) {
     return new NotificationEmitter(
       new OperationalEventRepository(prisma),
       new NotificationOutboxRepository(prisma),
@@ -459,7 +461,10 @@ async function dashboardPublisher(publisherIdentityId: string) {
     identity.id,
     emitter ? async (failure) => {
       const stored = await new SettingsRepository(prisma).getAll();
-      await emitter.emitPublishFailure({ jobId: failure.jobId, platformPostId: failure.platformPostId, publisherIdentityId: failure.publisherIdentityId, error: failure.error, attemptCount: failure.attemptCount, manualAttention: failure.manualAttention, retryable: failure.retryable }, { enabled: stored.NOTIFICATIONS_ENABLED === "true" && Boolean(config.telegramBotToken), chatId: stored.TELEGRAM_CHAT_ID ?? null });
+      const channels: Partial<Record<NotificationChannel, string>> = {};
+      if (config.telegramBotToken && stored.TELEGRAM_CHAT_ID) channels.telegram = stored.TELEGRAM_CHAT_ID;
+      if (config.discordBotToken && config.discordOwnerId && stored.NOTIFICATIONS_DISCORD_ENABLED === "true") channels.discord = config.discordOwnerId;
+      await emitter.emitPublishFailure({ jobId: failure.jobId, platformPostId: failure.platformPostId, publisherIdentityId: failure.publisherIdentityId, error: failure.error, attemptCount: failure.attemptCount, manualAttention: failure.manualAttention, retryable: failure.retryable }, { enabled: stored.NOTIFICATIONS_ENABLED === "true", channels });
     } : undefined,
   );
 }
@@ -932,11 +937,20 @@ export async function saveReviewSettings(formData: FormData) {
 export async function saveNotificationSettings(formData: FormData) {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   const enabled = z.enum(["true", "false"]).parse(formData.get("notificationsEnabled"));
-  const chatId = z.string().trim().min(1, "Enter the Telegram chat ID.").parse(formData.get("telegramChatId"));
-  if (enabled === "true" && !config.telegramBotToken) throw new Error("Add TELEGRAM_BOT_TOKEN to .env before enabling notifications.");
+  const chatId = z.string().trim().parse(formData.get("telegramChatId") ?? "");
+  if (enabled === "true" && !config.telegramBotToken && !config.discordBotToken) throw new Error("Add a Telegram or Discord bot token to .env before enabling notifications.");
   await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_ENABLED: enabled, TELEGRAM_CHAT_ID: chatId });
   refresh("/settings");
   redirect("/settings?notificationsSaved=1");
+}
+
+export async function saveDiscordNotificationSettings(formData: FormData) {
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  const enabled = z.enum(["true", "false"]).parse(formData.get("discordNotificationsEnabled"));
+  if (enabled === "true" && (!config.discordBotToken || !config.discordOwnerId)) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env before enabling Discord notifications.");
+  await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_DISCORD_ENABLED: enabled });
+  refresh("/settings");
+  redirect("/settings?discordNotificationsSaved=1");
 }
 
 export async function sendTestNotification() {
@@ -950,6 +964,15 @@ export async function sendTestNotification() {
   refresh("/settings");
   if (result.ok) redirect("/settings?notificationTest=delivered");
   redirect(`/settings?notificationTest=error&notificationTestError=${encodeURIComponent(result.error ?? "The test message could not be delivered.")}`);
+}
+
+export async function sendDiscordTestNotification() {
+  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+  if (!config.discordBotToken || !config.discordOwnerId) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env to send a test message.");
+  const result = await new DiscordDmTransport().send(config.discordOwnerId, "Cenblue test message — notifications are working.");
+  refresh("/settings");
+  if (result.ok) redirect("/settings?discordNotificationTest=delivered");
+  redirect(`/settings?discordNotificationTest=error&discordNotificationTestError=${encodeURIComponent(result.error ?? "The test message could not be delivered.")}`);
 }
 
 export async function verifyNotificationConnection() {

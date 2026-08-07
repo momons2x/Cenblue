@@ -12,6 +12,7 @@ Keep `PUBLISH_MODE=ASSISTED` until the publisher session, captions, review flow,
 - Review Queue failures, `MANUAL_ATTENTION`, and amber past-due warnings before retrying.
 - If notifications are enabled, check that Telegram delivery still works after bot or chat changes, and confirm the `TELEGRAM_BOT_TOKEN` in `.env` is still valid. Use `pnpm notify:status` for a summary and `pnpm notify:test` for a real delivery check.
 - If the Discord bot is configured, confirm `DISCORD_BOT_TOKEN`/`DISCORD_OWNER_ID` in `.env` are valid and that `/status` in a DM still replies; the bot connects whenever the dashboard runs.
+- For Discord DM alerts, keep the Discord **Notifications** toggle enabled in Settings and use **Send test DM** to confirm the bot can reach the owner's DM channel.
 - Check the Overview **Local runtime** panel for worker status and last errors from the CLI workers' heartbeats.
 - Confirm `yt-dlp`, `ffmpeg`, and `ffprobe` still exist at their configured `.env` paths, especially after a WinGet upgrade or cleanup. Prefer PATH-based values (`yt-dlp`, `ffmpeg`, `ffprobe`) so tool updates do not leave stale absolute paths.
 - Monitor free disk space and `storage/logs`.
