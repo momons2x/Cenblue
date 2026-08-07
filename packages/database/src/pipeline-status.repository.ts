@@ -11,6 +11,15 @@ export type PipelineStatus = {
   workerActivity: { component: string; status: string; updatedAt: string }[];
 };
 
+export type PublishedListing = {
+  id: string;
+  platformPostId: string;
+  platformUrl: string | null;
+  publishedAt: Date;
+  publisherLabel: string | null;
+  mediaRemoved: boolean;
+};
+
 export class PipelineStatusRepository {
   constructor(private readonly client: PrismaClient) {}
 
@@ -53,5 +62,29 @@ export class PipelineStatusRepository {
       for (const worker of status.workerActivity) lines.push(`  ${worker.component}: ${worker.status}`);
     }
     return lines.join("\n");
+  }
+
+  async listPublished(limit = 10): Promise<PublishedListing[]> {
+    const records = await this.client.publishedPost.findMany({
+      orderBy: { publishedAt: "desc" },
+      take: limit,
+      include: {
+        publishJob: {
+          include: {
+            publisherIdentity: { select: { label: true } },
+            mediaAsset: { select: { localRemovedAt: true } },
+            sourcePost: { select: { platformPostId: true } },
+          },
+        },
+      },
+    });
+    return records.map((record) => ({
+      id: record.id,
+      platformPostId: record.publishJob.sourcePost.platformPostId,
+      platformUrl: record.platformUrl,
+      publishedAt: record.publishedAt,
+      publisherLabel: record.publishJob.publisherIdentity?.label ?? null,
+      mediaRemoved: Boolean(record.publishJob.mediaAsset?.localRemovedAt),
+    }));
   }
 }

@@ -5,7 +5,7 @@ import { NotificationStatusService, TelegramTransport } from "@cenblu/notificati
 import { setActiveDiscordClient } from "./registry";
 
 export const commandPrefix = "!";
-export const commandHelp = "Commands: !status, !pipeline, !test, !help";
+export const commandHelp = "Commands: !status, !pipeline, !published, !test, !help";
 
 export type DiscordBotOptions = {
   token: string;
@@ -70,8 +70,26 @@ export class DiscordBot {
     if (!command) return;
     if (command === "status") await this.statusCommand(message);
     else if (command === "pipeline") await this.pipelineCommand(message);
+    else if (command === "published") await this.publishedCommand(message);
     else if (command === "test") await this.testCommand(message);
     else if (command === "help") await message.reply(commandHelp);
+  }
+
+  private async publishedCommand(message: Message): Promise<void> {
+    const published = await new PipelineStatusRepository(prisma).listPublished(10);
+    if (published.length === 0) {
+      await message.reply("No published posts yet.");
+      return;
+    }
+    const lines = ["Recent published posts:"];
+    for (const entry of published) {
+      const time = new Intl.DateTimeFormat("en", { dateStyle: "short", timeStyle: "short" }).format(entry.publishedAt);
+      const media = entry.mediaRemoved ? "media removed" : "media local";
+      const publisher = entry.publisherLabel ?? "unknown";
+      const anchor = entry.platformUrl ? ` · [post](<${entry.platformUrl}>)` : "";
+      lines.push(`- ${entry.platformPostId} · ${publisher} · ${time} · ${media}${anchor}`);
+    }
+    await message.reply(lines.join("\n"));
   }
 
   private async statusCommand(message: Message): Promise<void> {

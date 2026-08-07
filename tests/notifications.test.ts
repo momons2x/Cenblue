@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
-import { NotificationEmitter, NotificationDispatcher, NotificationStatusService, TelegramTransport, type NotificationTransport, type TelegramSendResult } from "@cenblu/notifications";
-import { NotificationOutboxRepository, OperationalEventRepository, prisma } from "@cenblu/database";
+import { createPublishNotifier, NotificationEmitter, NotificationDispatcher, NotificationStatusService, TelegramTransport, type NotificationTransport, type TelegramSendResult } from "@cenblu/notifications";
+import { NotificationOutboxRepository, OperationalEventRepository, prisma, SettingsRepository } from "@cenblu/database";
 
 beforeEach(async () => {
   await prisma.notificationOutbox.deleteMany();
@@ -117,6 +117,7 @@ describe("notification emitter", () => {
     expect(record.severity).toBe("INFO");
     expect(record.message).toContain("Published X post 90007 via Publisher One");
     expect(record.message).toContain("https://x.com/a/status/90007");
+    expect(record.message).toContain("Please confirm it posted");
   });
 
   it("dedupes repeated published-post notifications for the same job", async () => {
@@ -313,5 +314,33 @@ describe("notification status", () => {
     expect(report.chatReachable).toBe(true);
     expect(report.chatTitle).toBe("My Channel");
     expect(calls).toBe(2);
+  });
+});
+
+describe("createPublishNotifier", () => {
+  it("enqueues to every configured channel on success and failure", async () => {
+    await new SettingsRepository(prisma).setMany({
+      NOTIFICATIONS_ENABLED: "true",
+      TELEGRAM_CHAT_ID: "123",
+      NOTIFICATIONS_DISCORD_ENABLED: "true",
+    });
+    const notifier = await createPublishNotifier(prisma, { telegramBotToken: "tg", discordBotToken: "dc", discordOwnerId: "456" });
+    expect(notifier).not.toBeNull();
+    await notifier!.onPublishSuccess({ jobId: "job-a", platformPostId: "90090", publisherIdentityId: null, platformUrl: "https://x.com/a/status/90090" });
+    await notifier!.onPublishFailure({ jobId: "job-b", platformPostId: "90091", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: false, retryable: false });
+    const rows = await prisma.notificationOutbox.findMany({ orderBy: { channel: "asc" }, select: { channel: true, text: true } });
+    const byChannel: Record<string, string[]> = {};
+    for (const row of rows) (byChannel[row.channel] ??= []).push(row.text);
+    expect(byChannel.discord).toHaveLength(2);
+    expect(byChannel.telegram).toHaveLength(2);
+    expect(byChannel.telegram.join("\n")).toContain("Published X post 90090");
+    expect(byChannel.telegram.join("\n")).toContain("Please confirm it posted");
+    expect(byChannel.telegram.join("\n")).toContain("Publication failed");
+  });
+
+  it("returns null when notifications are disabled", async () => {
+    await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_ENABLED: "false" });
+    const notifier = await createPublishNotifier(prisma, { telegramBotToken: "tg", discordBotToken: "dc", discordOwnerId: "456" });
+    expect(notifier).toBeNull();
   });
 });

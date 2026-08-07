@@ -33,7 +33,8 @@ The project intends to follow semantic versioning once release automation is est
 - Discord direct-message alerts: publish notifications can be delivered to the owner's DM through the bot, enabled and tested from a Discord panel in Settings alongside Telegram.
 - Publish-success notifications: successful publishes now alert all configured channels, with a **Send test publish notification** button on the Published page to verify the chain.
 - Discord bot commands moved from slash to `!` prefix commands (`!status`, `!pipeline`, `!test`, `!help`), with an explicit online presence so the bot shows as online in Discord.
-- Telegram commands: the dashboard long-polls `getUpdates` and answers `/status`, `/pipeline`, `/test`, and `/help` for the configured chat, so state can be queried from the phone.
+- Telegram commands: the dashboard long-polls `getUpdates` and answers `/status`, `/pipeline`, `/published`, `/test`, and `/help` for the configured chat, so state can be queried from the phone.
+- Success notifications now fire on **every** publish path (manual, automatic, and pipeline), sending the post URL to all configured channels with a prompt to confirm the post is live before local media is deleted. A `published` command (Telegram `/published`, Discord `!published`) lists the latest published posts with links and local-media state.
 - Batch scheduling with a humanizer: shuffle a set of approved posts and auto-assign staggered times across a configurable active window with random jitter and a minimum gap, plus a per-batch "posts today" override.
 
 ### Changed

@@ -50,4 +50,20 @@ describe("pipeline status", () => {
     expect(report.publishedToday).toBe(1);
     expect(report.publishedTotal).toBe(1);
   });
+
+  it("lists recent published posts with links and media state", async () => {
+    const accounts = new SourceAccountRepository(prisma);
+    const source = await accounts.create({ username: "pipeline_list", enabled: true });
+    const posts = new SourcePostRepository(prisma);
+    await posts.persistNew(source.id, [{ platformPostId: "920004", sourceUrl: "https://x.com/pipeline_list/status/920004", text: "d", postedAt: new Date(), mediaType: "VIDEO" }], new Date());
+    const post = await prisma.sourcePost.findUniqueOrThrow({ where: { platformPostId: "920004" } });
+    const media = await prisma.mediaAsset.create({ data: { sourcePostId: post.id, filePath: "video.mp4", mimeType: "video/mp4", fileSize: 1, durationSeconds: 1, width: 1, height: 1, checksum: "list-checksum" } });
+    const job = await prisma.publishJob.create({ data: { sourcePostId: post.id, mediaAssetId: media.id, caption: "d", status: "COMPLETED" } });
+    await prisma.publishedPost.create({ data: { publishJobId: job.id, publishedAt: new Date(), platformUrl: "https://x.com/cenblu/status/920004" } });
+
+    const listing = await new PipelineStatusRepository(prisma).listPublished(10);
+    expect(listing).toHaveLength(1);
+    expect(listing[0]).toMatchObject({ platformPostId: "920004", platformUrl: "https://x.com/cenblu/status/920004", mediaRemoved: false });
+    expect(listing[0].publisherLabel).toBeNull();
+  });
 });

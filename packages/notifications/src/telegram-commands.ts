@@ -40,10 +40,28 @@ export class TelegramCommandHandler {
       return { handled: true, replied: true };
     }
     if (command === "help") {
-      await this.reply("Commands: /status, /pipeline, /test, /help");
+      await this.reply("Commands: /status, /pipeline, /published, /test, /help");
+      return { handled: true, replied: true };
+    }
+    if (command === "published") {
+      await this.reply(await this.publishedText());
       return { handled: true, replied: true };
     }
     return { handled: false };
+  }
+
+  private async publishedText(): Promise<string> {
+    const published = await this.options.pipeline.listPublished(10);
+    if (published.length === 0) return "No published posts yet.";
+    const lines = ["Recent published posts:"];
+    for (const entry of published) {
+      const time = new Intl.DateTimeFormat("en", { dateStyle: "short", timeStyle: "short" }).format(entry.publishedAt);
+      const media = entry.mediaRemoved ? "media removed" : "media local";
+      const publisher = entry.publisherLabel ?? "unknown";
+      const url = entry.platformUrl ? ` ${entry.platformUrl}` : "";
+      lines.push(`- ${entry.platformPostId} · ${publisher} · ${time} · ${media}${url}`);
+    }
+    return lines.join("\n");
   }
 
   private async statusText(): Promise<string> {

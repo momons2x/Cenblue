@@ -69,7 +69,7 @@ export class NotificationEmitter {
       ? (await this.resolvePublisherLabel?.(context.publisherIdentityId)) ?? "unknown publisher"
       : "unassigned publisher";
     const link = context.platformUrl ? `\n${context.platformUrl}` : "";
-    const message = `Published X post ${context.platformPostId} via ${label}.${link}`;
+    const message = `Published X post ${context.platformPostId} via ${label}.${link}\nPlease confirm it posted — the local media will be deleted once you confirm it on the Published page.`;
     await this.events.insert({
       type: "publish.success",
       severity: "INFO",

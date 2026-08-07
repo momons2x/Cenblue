@@ -2,6 +2,7 @@ import pino from "pino";
 import { resolve } from "node:path";
 import { applyStoredSettings, loadConfig } from "@cenblu/config";
 import { DatabaseExclusiveLease, identityFingerprint, identityLeaseName, prisma, PublishRepository, SchedulerRepository, SettingsRepository } from "@cenblu/database";
+import { createPublishNotifier } from "@cenblu/notifications";
 import { LocalPublishMediaVerifier, PublishService, XPlaywrightPublisher } from "@cenblu/publisher";
 import { combineExclusiveLeases } from "@cenblu/shared/lease";
 
@@ -27,6 +28,11 @@ export function startAutomaticPublisher(): void {
       const config = applyStoredSettings(loadConfig(), storedSettings);
       if (config.publishMode !== "AUTOMATIC") return;
       const repository = new PublishRepository(prisma);
+      const notifier = await createPublishNotifier(prisma, {
+        telegramBotToken: config.telegramBotToken,
+        discordBotToken: config.discordBotToken,
+        discordOwnerId: config.discordOwnerId,
+      }, async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null);
       const identities = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true, automaticEnabled: true, verifiedAt: { not: null } }, orderBy: { createdAt: "asc" } });
       for (const identity of identities) {
         if (!identity.expectedUsername || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) continue;
@@ -38,6 +44,7 @@ export function startAutomaticPublisher(): void {
           repository,
           new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, browserLease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername }, logger),
           new LocalPublishMediaVerifier(config.videoStoragePath), logger, config.publishAllowEmptyCaption, 3, identity.id,
+          notifier?.onPublishFailure, notifier?.onPublishSuccess,
         );
         for (const jobId of dueJobIds) {
           try { await service.processJob(jobId); }

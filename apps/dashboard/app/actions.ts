@@ -11,7 +11,7 @@ import { applyStoredSettings, browserBindingFingerprint, browserIds, loadConfig 
 import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, NotificationOutboxRepository, OperationalEventRepository, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
-import { NotificationEmitter, TelegramTransport, type NotificationChannel } from "@cenblu/notifications";
+import { createPublishNotifier, NotificationEmitter, TelegramTransport, type NotificationChannel } from "@cenblu/notifications";
 import { DiscordDmTransport } from "@cenblu/discord-bot";
 import { buildBatchSchedule } from "@cenblu/scheduler";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
@@ -501,7 +501,11 @@ async function dashboardPublisher(publisherIdentityId: string) {
   const repository = new PublishRepository(prisma);
   const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
   const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-  const emitter = await buildNotificationEmitter(config);
+  const notifier = await createPublishNotifier(prisma, {
+    telegramBotToken: config.telegramBotToken,
+    discordBotToken: config.discordBotToken,
+    discordOwnerId: config.discordOwnerId,
+  }, async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null);
   return new PublishService(
     repository,
     new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, browserLease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername ?? undefined }, logger),
@@ -510,8 +514,8 @@ async function dashboardPublisher(publisherIdentityId: string) {
     config.publishAllowEmptyCaption,
     3,
     identity.id,
-    emitter ? async (failure) => { await emitter.emitPublishFailure({ jobId: failure.jobId, platformPostId: failure.platformPostId, publisherIdentityId: failure.publisherIdentityId, error: failure.error, attemptCount: failure.attemptCount, manualAttention: failure.manualAttention, retryable: failure.retryable }, await notificationSettings(config)); } : undefined,
-    emitter ? async (success) => { await emitter.emitPublishedPost({ jobId: success.jobId, platformPostId: success.platformPostId, publisherIdentityId: success.publisherIdentityId, platformUrl: success.platformUrl }, await notificationSettings(config)); } : undefined,
+    notifier?.onPublishFailure,
+    notifier?.onPublishSuccess,
   );
 }
 

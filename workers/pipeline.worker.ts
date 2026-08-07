@@ -4,6 +4,7 @@ import { CollectionService, PlaywrightTimelineBrowser, XPlaywrightCollector } fr
 import { DatabaseExclusiveLease, identityFingerprint, identityLeaseName, prisma, DownloadRepository, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadService, FfmpegPerceptualVideoHasher, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
 import { LocalPublishMediaVerifier, PublishService, resolveCaption, XPlaywrightPublisher } from "@cenblu/publisher";
+import { createPublishNotifier } from "@cenblu/notifications";
 import { PipelineRunner, PipelineService } from "@cenblu/scheduler";
 import { createLogger } from "@cenblu/shared/logger";
 import { combineExclusiveLeases } from "@cenblu/shared/lease";
@@ -38,6 +39,11 @@ async function main(): Promise<void> {
     publish: async () => {
       if (config.publishMode !== "AUTOMATIC") return false;
       await runtime.update("pipeline", "RUNNING", "publish");
+      const notifier = await createPublishNotifier(prisma, {
+        telegramBotToken: config.telegramBotToken,
+        discordBotToken: config.discordBotToken,
+        discordOwnerId: config.discordOwnerId,
+      }, async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null);
       const identities = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true, automaticEnabled: true, verifiedAt: { not: null } }, orderBy: { createdAt: "asc" } });
       for (const identity of identities) {
         if (!identity.expectedUsername || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) continue;
@@ -45,7 +51,7 @@ async function main(): Promise<void> {
         if (!jobId) continue;
         const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
         const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-        const publisher = new PublishService(publishRepository, new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, lease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername }, logger), new LocalPublishMediaVerifier(config.videoStoragePath), logger, config.publishAllowEmptyCaption, 3, identity.id);
+        const publisher = new PublishService(publishRepository, new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, lease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername }, logger), new LocalPublishMediaVerifier(config.videoStoragePath), logger, config.publishAllowEmptyCaption, 3, identity.id, notifier?.onPublishFailure, notifier?.onPublishSuccess);
         return publisher.processJob(jobId);
       }
       return false;
