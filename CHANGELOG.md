@@ -37,6 +37,7 @@ The project intends to follow semantic versioning once release automation is est
 - Success notifications now fire on **every** publish path (manual, automatic, and pipeline), sending the post URL to all configured channels with a prompt to confirm the post is live before local media is deleted. A `published` command (Telegram `/published`, Discord `!published`) lists the latest published posts with links and local-media state.
 - Batch scheduling with a humanizer: shuffle a set of approved posts and auto-assign staggered times across a configurable active window with random jitter and a minimum gap, plus a per-batch "posts today" override.
 - Review queue sorting: sort by newest or oldest post date, alongside the existing newest-updated, size, duration, caption-length, and source sorts.
+- Background download runs: **Process pending now**, **Download now**, and bulk retry-downloads start a guarded background batch in the dashboard process instead of blocking the request, so you can keep browsing while downloads progress; a live progress bar now follows you on every page, and the Queue confirms the run with a status toast.
 
 ### Changed
 

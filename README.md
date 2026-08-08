@@ -186,6 +186,8 @@ The **Compose** page publishes original text or one image through one or more ex
 
 The **Overview** page shows live status for the CLI workers (collector, downloader, publisher, pipeline) from their runtime heartbeats. The dashboard exposes a minimal health endpoint at `/api/health` returning the application version, timezone, database and storage availability, and pending work counts; the application version also appears in the sidebar footer.
 
+Download batches run in the background: **Process pending now** on the Queue, per-job **Download now**, and bulk retry-downloads start the work in the dashboard process and return immediately, so navigation stays responsive while media downloads. A live progress bar follows you on every page until the batch finishes, and the Queue acknowledges the run with a status toast. Only one run can be active at a time; pressing the action again while a run is live shows the ongoing progress instead of starting a second batch.
+
 ## Scheduled Publishing
 
 Automatic scheduled publishing requires all of the following:
