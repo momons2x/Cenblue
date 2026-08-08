@@ -352,7 +352,7 @@ export async function scheduleBatchReview(formData: FormData) {
   const rawDay = String(formData.get("scheduleDay") ?? "").trim();
   const targetDay = rawDay || new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(new Date());
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDay)) throw new Error("Choose a valid schedule day.");
-  const rawCount = String(formData.get("postsToday") ?? "").trim();
+  const rawCount = String(formData.get("postsPerDay") ?? "").trim();
   const countOverride = rawCount === "" ? undefined : z.coerce.number().int().min(1).max(50).parse(rawCount);
   const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
   const publishers = await prisma.browserIdentity.findMany({ where: { id: { in: publisherIdentityIds }, role: "PUBLISHER", enabled: true } });
@@ -365,7 +365,7 @@ export async function scheduleBatchReview(formData: FormData) {
     activeEnd: config.scheduleActiveEnd,
     jitterMinutes: config.scheduleJitterMinutes,
     minGapMinutes: config.scheduleMinGapMinutes,
-    countOverride,
+    postsPerDay: countOverride,
     targetDay,
   });
 
@@ -378,7 +378,8 @@ export async function scheduleBatchReview(formData: FormData) {
   const first = schedule[0]?.scheduledFor;
   const last = schedule[schedule.length - 1]?.scheduledFor;
   const intervalMinutes = schedule.length > 1 && first && last ? Math.round((last.getTime() - first.getTime()) / (schedule.length - 1) / 60_000) : 0;
-  redirect(`/review?batchScheduled=${schedule.length}&batchDay=${targetDay}&batchInterval=${intervalMinutes}&batchFirst=${first ? first.toISOString() : ""}`);
+  const formatDay = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(date);
+  redirect(`/review?batchScheduled=${schedule.length}&batchDay=${formatDay(first ?? new Date())}&batchEndDay=${last ? formatDay(last) : formatDay(first ?? new Date())}&batchInterval=${intervalMinutes}&batchFirst=${first ? first.toISOString() : ""}`);
 }
 
 

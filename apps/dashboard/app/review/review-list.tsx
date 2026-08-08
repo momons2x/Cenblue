@@ -52,6 +52,7 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [compressing, setCompressing] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(reviewers.previewEnabled);
+  const [batchSelected, setBatchSelected] = useState<Record<string, boolean>>({});
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const selected = jobs.find((job) => job.id === selectedId);
@@ -73,7 +74,7 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
 
   return <>
     <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] gap-4">{jobs.map((job) => <article className="grid min-h-64 min-w-0 content-start gap-4 rounded-sm border border-line bg-surface p-5 text-ink" key={job.id}>
-      <label className="flex items-center gap-2 text-xs text-muted"><input form="bulk-review" type="checkbox" name="publishJobId" value={job.id} /><span>Select</span></label>
+      <label className="flex items-center gap-2 text-xs text-muted"><input form="bulk-review" type="checkbox" name="publishJobId" value={job.id} onChange={(event) => setBatchSelected((prev) => ({ ...prev, [job.id]: event.target.checked }))} /><input hidden form="batch-schedule" type="checkbox" name="publishJobId" value={job.id} checked={Boolean(batchSelected[job.id])} onChange={() => {}} readOnly /><span>Select</span></label>
       <dl className="m-0 grid grid-cols-2 border-y border-line"><div className="min-w-0 py-3"><dt className="text-[9px] font-semibold uppercase tracking-[.12em] text-muted">Size</dt><dd className="m-0 mt-1 break-words text-xl font-semibold">{(job.mediaAsset.fileSize / 1_000_000).toFixed(1)} MB</dd></div><div className="min-w-0 border-l border-line py-3 pl-3"><dt className="text-[9px] font-semibold uppercase tracking-[.12em] text-muted">Duration</dt><dd className="m-0 mt-1 break-words text-xl font-semibold">{job.mediaAsset.durationSeconds.toFixed(1)}s</dd></div></dl>
       <div className="min-w-0"><span className="text-[9px] font-semibold uppercase tracking-[.12em] text-muted">Caption</span><ExpandableText className="mt-1 text-[13px] leading-relaxed text-ink" lines={3}>{job.caption || "No caption"}</ExpandableText></div>
       <button className="small-button mt-auto justify-self-start" type="button" onClick={() => setSelectedId(job.id)}>Open review</button>

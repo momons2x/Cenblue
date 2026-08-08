@@ -16,6 +16,10 @@ function hourOf(date: Date, zone: string): number {
   return Number(new Intl.DateTimeFormat("en", { timeZone: zone, hour: "2-digit", hour12: false }).format(date));
 }
 
+function dayOf(date: Date, zone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(date);
+}
+
 describe("buildBatchSchedule", () => {
   it("schedules every job within the active window", () => {
     const result = buildBatchSchedule({ ...base, jobs: jobs(5) });
@@ -35,11 +39,34 @@ describe("buildBatchSchedule", () => {
     expect(first).toEqual(second);
   });
 
-  it("clamps the count override to the number of jobs", () => {
-    const result = buildBatchSchedule({ ...base, jobs: jobs(3), countOverride: 10 });
-    expect(result).toHaveLength(3);
-    const fewer = buildBatchSchedule({ ...base, jobs: jobs(6), countOverride: 2 });
-    expect(fewer).toHaveLength(2);
+  it("spills overflow across the following days when no per-day cap is given", () => {
+    const result = buildBatchSchedule({ ...base, jobs: jobs(55), minGapMinutes: 15 });
+    expect(result).toHaveLength(55);
+    const days = new Set(result.map((entry) => dayOf(entry.scheduledFor, timeZone)));
+    expect(days.size).toBe(2);
+    for (const entry of result) {
+      const hour = Number(hourOf(entry.scheduledFor, timeZone));
+      expect(hour).toBeGreaterThanOrEqual(9);
+      expect(hour).toBeLessThanOrEqual(22);
+    }
+  });
+
+  it("respects a posts-per-day cap and spills the rest to following days", () => {
+    const result = buildBatchSchedule({ ...base, jobs: jobs(5), postsPerDay: 2 });
+    expect(result).toHaveLength(5);
+    const counts: Record<string, number> = {};
+    for (const entry of result) {
+      const day = dayOf(entry.scheduledFor, timeZone);
+      counts[day] = (counts[day] ?? 0) + 1;
+    }
+    expect(Object.values(counts).sort((a, b) => a - b)).toEqual([1, 2, 2]);
+  });
+
+  it("clamps a per-day cap to the active window capacity", () => {
+    const result = buildBatchSchedule({ ...base, jobs: jobs(60), minGapMinutes: 15, postsPerDay: 100 });
+    expect(result).toHaveLength(60);
+    const days = new Set(result.map((entry) => dayOf(entry.scheduledFor, timeZone)));
+    expect(days.size).toBe(2);
   });
 
   it("applies random jitter within bounds", () => {
@@ -51,11 +78,20 @@ describe("buildBatchSchedule", () => {
     }
   });
 
-  it("keeps slots at least minGapMinutes apart", () => {
+  it("keeps slots at least minGapMinutes apart within each day", () => {
     const result = buildBatchSchedule({ ...base, jobs: jobs(8), jitterMinutes: 10, minGapMinutes: 15 });
-    const sorted = [...result.map((entry) => entry.scheduledFor.getTime())].sort((a, b) => a - b);
-    for (let index = 1; index < sorted.length; index += 1) {
-      expect(sorted[index] - sorted[index - 1]).toBeGreaterThanOrEqual(15 * 60_000);
+    const byDay = new Map<string, number[]>();
+    for (const entry of result) {
+      const day = dayOf(entry.scheduledFor, timeZone);
+      const times = byDay.get(day) ?? [];
+      times.push(entry.scheduledFor.getTime());
+      byDay.set(day, times);
+    }
+    for (const times of byDay.values()) {
+      const sorted = times.sort((a, b) => a - b);
+      for (let index = 1; index < sorted.length; index += 1) {
+        expect(sorted[index] - sorted[index - 1]).toBeGreaterThanOrEqual(15 * 60_000);
+      }
     }
   });
 
