@@ -932,6 +932,8 @@ export async function saveSettings(formData: FormData) {
     SCHEDULE_MIN_GAP_MINUTES: String(z.coerce.number().int().min(0).max(180).parse(formData.get("scheduleMinGapMinutes"))),
     APP_TIMEZONE: timezone,
   };
+  const toMinutes = (value: string) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
+  if (toMinutes(values.SCHEDULE_ACTIVE_START) === toMinutes(values.SCHEDULE_ACTIVE_END)) throw new Error("Active window start and end must be different times.");
   await new SettingsRepository(prisma).setMany(values);
   refresh("/settings", "/");
 }

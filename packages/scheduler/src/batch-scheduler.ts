@@ -34,7 +34,8 @@ function shuffle<T>(items: T[], random: () => number): T[] {
 
 function dayWindow(day: Temporal.PlainDate, timeZone: string, start: { hour: number; minute: number }, end: { hour: number; minute: number }): { startMs: number; endMs: number } {
   const startMs = day.toZonedDateTime({ timeZone, plainTime: new Temporal.PlainTime(start.hour, start.minute) }).epochMilliseconds;
-  const endMs = day.toZonedDateTime({ timeZone, plainTime: new Temporal.PlainTime(end.hour, end.minute) }).epochMilliseconds;
+  const endDay = start.hour * 60 + start.minute < end.hour * 60 + end.minute ? day : day.add({ days: 1 });
+  const endMs = endDay.toZonedDateTime({ timeZone, plainTime: new Temporal.PlainTime(end.hour, end.minute) }).epochMilliseconds;
   return { startMs, endMs };
 }
 
@@ -65,7 +66,7 @@ export function buildBatchSchedule(input: BatchScheduleInput): ScheduledJob[] {
   const random = input.random ?? Math.random;
   const start = parseTime(input.activeStart);
   const end = parseTime(input.activeEnd);
-  if (start.hour * 60 + start.minute >= end.hour * 60 + end.minute) throw new Error("The schedule active window must start before it ends.");
+  if (start.hour * 60 + start.minute === end.hour * 60 + end.minute) throw new Error("The schedule active window start and end must be different times.");
 
   const day = Temporal.PlainDate.from(input.targetDay);
   const { startMs: dayStartMs, endMs: dayEndMs } = dayWindow(day, input.timeZone, start, end);

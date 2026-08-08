@@ -20,6 +20,13 @@ function dayOf(date: Date, zone: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(date);
 }
 
+function nightOf(date: Date, zone: string): string {
+  const hour = Number(hourOf(date, zone));
+  const calendar = dayOf(date, zone);
+  if (hour >= 14) return calendar;
+  return dayOf(new Date(date.getTime() - 24 * 3_600_000), zone);
+}
+
 describe("buildBatchSchedule", () => {
   it("schedules every job within the active window", () => {
     const result = buildBatchSchedule({ ...base, jobs: jobs(5) });
@@ -99,7 +106,31 @@ describe("buildBatchSchedule", () => {
     expect(buildBatchSchedule({ ...base, jobs: [] })).toEqual([]);
   });
 
-  it("rejects an inverted active window", () => {
-    expect(() => buildBatchSchedule({ ...base, activeStart: "22:00", activeEnd: "09:00", jobs: jobs(2) })).toThrow(/must start before/);
+  it("supports a midnight-crossing active window", () => {
+    const result = buildBatchSchedule({ ...base, activeStart: "14:25", activeEnd: "04:00", jobs: jobs(5), jitterMinutes: 5, minGapMinutes: 25 });
+    expect(result).toHaveLength(5);
+    const sorted = [...result.map((entry) => entry.scheduledFor.getTime())].sort((a, b) => a - b);
+    for (let index = 1; index < sorted.length; index += 1) {
+      expect(sorted[index] - sorted[index - 1]).toBeGreaterThanOrEqual(25 * 60_000);
+    }
+    for (const entry of result) {
+      const hour = Number(hourOf(entry.scheduledFor, timeZone));
+      expect(hour >= 14 || hour <= 4).toBe(true);
+    }
+  });
+
+  it("spills an overnight window across following nights", () => {
+    const result = buildBatchSchedule({ ...base, activeStart: "14:25", activeEnd: "04:00", jobs: jobs(40), minGapMinutes: 25 });
+    expect(result).toHaveLength(40);
+    const nights = new Set(result.map((entry) => nightOf(entry.scheduledFor, timeZone)));
+    expect(nights.size).toBe(2);
+    const sorted = [...result.map((entry) => entry.scheduledFor.getTime())].sort((a, b) => a - b);
+    for (let index = 1; index < sorted.length; index += 1) {
+      expect(sorted[index] - sorted[index - 1]).toBeGreaterThanOrEqual(25 * 60_000);
+    }
+  });
+
+  it("rejects an empty (equal-time) active window", () => {
+    expect(() => buildBatchSchedule({ ...base, activeStart: "22:00", activeEnd: "22:00", jobs: jobs(2) })).toThrow(/must be different times/);
   });
 });
