@@ -210,10 +210,10 @@ All schedule controls use the configured `APP_TIMEZONE` with native date and tim
 Instead of assigning each post a time by hand, approve a set of posts at once and let Cenblue **shuffle them and auto-assign staggered times** across a day:
 
 1. Select posts on the **Review** page and open **Bulk actions → Batch schedule**.
-2. Pick the schedule day (defaults to today) and optionally enter **Posts today** to override the global daily settings.
+2. Pick the schedule day (defaults to today) and optionally enter **Posts per day** to limit how many posts land in a single day.
 3. Choose Publisher targets and approve.
 
-Cenblue shuffles the selected posts, spreads them evenly across the **active window**, and adds **random jitter** so the timing looks human. Nothing posts during the quiet hours between the window's end and the next day's start. Configure the window and jitter under **Settings → Publishing → Batch schedule**:
+Cenblue shuffles the selected posts, spreads them evenly across the **active window**, and adds **random jitter** so the timing looks human. Nothing posts during the quiet hours between the window's end and the next day's start. When the batch is larger than one day's window, the remaining posts **auto-spill into the following days** with the same active hours and per-day spacing until every selected post has a time. Configure the window and jitter under **Settings → Publishing → Batch schedule**:
 
 - `SCHEDULE_ACTIVE_START` / `SCHEDULE_ACTIVE_END` — the only hours posts can land (default `09:00`–`22:00`; this is the "no posts overnight" quiet period).
 - `SCHEDULE_JITTER_MINUTES` — random ±offset per slot (default `10`).
