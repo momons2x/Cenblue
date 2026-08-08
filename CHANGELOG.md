@@ -36,6 +36,7 @@ The project intends to follow semantic versioning once release automation is est
 - Telegram commands: the dashboard long-polls `getUpdates` and answers `/status`, `/pipeline`, `/published`, `/test`, and `/help` for the configured chat, so state can be queried from the phone.
 - Success notifications now fire on **every** publish path (manual, automatic, and pipeline), sending the post URL to all configured channels with a prompt to confirm the post is live before local media is deleted. A `published` command (Telegram `/published`, Discord `!published`) lists the latest published posts with links and local-media state.
 - Batch scheduling with a humanizer: shuffle a set of approved posts and auto-assign staggered times across a configurable active window with random jitter and a minimum gap, plus a per-batch "posts today" override.
+- Review queue sorting: sort by newest or oldest post date, alongside the existing newest-updated, size, duration, caption-length, and source sorts.
 
 ### Changed
 

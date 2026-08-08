@@ -178,6 +178,8 @@ export async function getReviewQueue(source?: string, sort = "oldest") {
   jobs.sort((left, right) => {
     let difference = 0;
     if (sort === "newest") difference = right.updatedAt.getTime() - left.updatedAt.getTime();
+    else if (sort === "post-newest") difference = right.sourcePost.postedAt.getTime() - left.sourcePost.postedAt.getTime();
+    else if (sort === "post-oldest") difference = left.sourcePost.postedAt.getTime() - right.sourcePost.postedAt.getTime();
     else if (sort === "largest") difference = right.mediaAsset.fileSize - left.mediaAsset.fileSize;
     else if (sort === "smallest") difference = left.mediaAsset.fileSize - right.mediaAsset.fileSize;
     else if (sort === "longest") difference = right.mediaAsset.durationSeconds - left.mediaAsset.durationSeconds;
