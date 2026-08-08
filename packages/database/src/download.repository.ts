@@ -29,7 +29,10 @@ export class DownloadRepository {
       });
       const candidate = await transaction.downloadJob.findFirst({
         where: {
-          sourcePost: { status: "QUEUED_FOR_DOWNLOAD" },
+          sourcePost: {
+            status: "QUEUED_FOR_DOWNLOAD",
+            publishJobs: { none: { publishedPost: { isNot: null } } },
+          },
           OR: [
             { status: "PENDING" },
             { status: "RETRY_WAIT", nextAttemptAt: { lte: now } },
@@ -43,6 +46,7 @@ export class DownloadRepository {
       const claimed = await transaction.downloadJob.updateMany({
         where: {
           id: candidate.id,
+          sourcePost: { publishJobs: { none: { publishedPost: { isNot: null } } } },
           OR: [
             { status: "PENDING" },
             { status: "RETRY_WAIT", nextAttemptAt: { lte: now } },
@@ -69,7 +73,7 @@ export class DownloadRepository {
       }
       const claimToken = randomUUID();
       const claimed = await transaction.downloadJob.updateMany({
-        where: { id: jobId, OR: [{ status: "PENDING" }, { status: "RETRY_WAIT", nextAttemptAt: { lte: now } }] },
+        where: { id: jobId, sourcePost: { publishJobs: { none: { publishedPost: { isNot: null } } } }, OR: [{ status: "PENDING" }, { status: "RETRY_WAIT", nextAttemptAt: { lte: now } }] },
         data: { status: "RUNNING", startedAt: now, heartbeatAt: now, claimToken, attemptCount: { increment: 1 }, nextAttemptAt: null, lastError: null, priority: 0 },
       });
       if (claimed.count !== 1) return null;
@@ -93,9 +97,10 @@ export class DownloadRepository {
 
   async requestNow(jobId: string, requestedAt = new Date()): Promise<void> {
     await withDatabaseRetry(() => this.client.$transaction(async (transaction) => {
-      const job = await transaction.downloadJob.findUniqueOrThrow({ where: { id: jobId }, select: { status: true, sourcePostId: true } });
+      const job = await transaction.downloadJob.findUniqueOrThrow({ where: { id: jobId }, select: { status: true, sourcePostId: true, sourcePost: { select: { publishJobs: { where: { publishedPost: { isNot: null } }, select: { id: true } } } } } });
       if (job.status === "COMPLETED") throw new Error("Completed downloads cannot be downloaded again from this action");
       if (job.status === "RUNNING") throw new Error("Download is already running");
+      if (job.sourcePost.publishJobs.length > 0) throw new Error("This post is already published and cannot be downloaded again.");
       await transaction.downloadJob.update({
         where: { id: jobId },
         data: { status: "PENDING", attemptCount: 0, nextAttemptAt: null, lastError: null, startedAt: null, heartbeatAt: null, claimToken: null, priority: 100, requestedAt },

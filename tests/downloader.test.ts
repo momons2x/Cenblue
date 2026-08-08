@@ -199,4 +199,16 @@ describe("downloader services", () => {
     expect(await prisma.downloadJob.findUniqueOrThrow({ where: { id: job.id } })).toMatchObject({ status: "CANCELLED" });
     expect(await prisma.sourcePost.findUniqueOrThrow({ where: { platformPostId: "20008" } })).toMatchObject({ status: "SKIPPED" });
   });
+
+  it("does not claim a pending job whose post is already published", async () => {
+    await queuedPost("20017");
+    const repository = new DownloadRepository(prisma);
+    const job = await prisma.downloadJob.findFirstOrThrow({ where: { sourcePost: { platformPostId: "20017" } } });
+    const post = await prisma.sourcePost.findFirstOrThrow({ where: { platformPostId: "20017" } });
+    const media = await prisma.mediaAsset.create({ data: { sourcePostId: post.id, filePath: "video.mp4", mimeType: "video/mp4", fileSize: 1, durationSeconds: 1, width: 1, height: 1, checksum: "published-download" } });
+    const publishJob = await prisma.publishJob.create({ data: { sourcePostId: post.id, mediaAssetId: media.id, caption: "already out", status: "COMPLETED" } });
+    await prisma.publishedPost.create({ data: { publishJobId: publishJob.id, publishedAt: new Date() } });
+    expect(await repository.claimNext(new Date(), new Date(0))).toBeNull();
+    await expect(repository.requestNow(job.id)).rejects.toThrow("already published");
+  });
 });
