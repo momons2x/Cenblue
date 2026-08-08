@@ -1,5 +1,5 @@
 import { bulkDownloadAction, cancelJob, changeJobStatus, downloadNow, processPendingDownloads, publishNow, resolveManualAttention, retryJob, schedulePublish } from "../actions";
-import { ActionForm, ConfirmSubmitButton, DownloadProgress, SubmitButton } from "../controls";
+import { ActionForm, ConfirmSubmitButton, SubmitButton } from "../controls";
 import { getQueue, getSettings } from "../lib/data";
 import { pastDueWarning } from "../lib/publish-alerts";
 import { Badge, Empty, Shell } from "../ui";
@@ -8,7 +8,7 @@ import { formatInTimeZone } from "../lib/schedule";
 
 export const dynamic = "force-dynamic";
 
-export default async function QueuePage({ searchParams }: { searchParams: Promise<{ status?: string; source?: string; publisher?: string; page?: string; actionError?: string }> }) {
+export default async function QueuePage({ searchParams }: { searchParams: Promise<{ status?: string; source?: string; publisher?: string; page?: string; actionError?: string; downloadStarted?: string; downloadBusy?: string }> }) {
   const params = await searchParams;
   const [{ downloads, publishes, sources, statuses, publishers, page }, settings] = await Promise.all([getQueue({ status: params.status, source: params.source, publisher: params.publisher, page: Number(params.page) || 1 }), getSettings()]);
   const actionableDownloads = downloads.filter((job) => ["PENDING", "FAILED", "RETRY_WAIT", "CANCELLED"].includes(job.status)).length;
@@ -17,10 +17,11 @@ export default async function QueuePage({ searchParams }: { searchParams: Promis
   return <Shell title="Queue" eyebrow="Cenblue / durable work">
     <form className="queue-filters" method="get"><label>Status<select name="status" defaultValue={params.status ?? ""}><option value="">All statuses</option>{statuses.map((status) => <option key={status} value={status}>{status.replaceAll("_", " ").toLowerCase().replace(/^./, (letter) => letter.toUpperCase())}</option>)}</select></label><label>Source<select name="source" defaultValue={params.source ?? ""}><option value="">All sources</option>{sources.map((source) => <option key={source.username} value={source.username}>@{source.username}</option>)}</select></label><label>Publisher<select name="publisher" defaultValue={params.publisher ?? ""}><option value="">All Publishers</option>{publishers.map((publisher) => <option key={publisher.id} value={publisher.id}>{publisher.label} (@{publisher.expectedUsername})</option>)}</select></label><button className="small-button accent-button" type="submit">Apply filters</button>{(params.status || params.source || params.publisher) && <a className="small-button" href="/queue">Clear</a>}</form>
     {params.actionError && <div className="toast error" role="alert">{params.actionError}</div>}
+    {params.downloadStarted && <div className="toast bookmark-success" role="status">Downloads started in the background. You can keep browsing — progress shows below.</div>}
+    {params.downloadBusy && <div className="toast" role="status">A download run is already active. Watch its progress below.</div>}
     {settings.publishMode === "AUTOMATIC" && readyPublishers.length === 0 && <div className="toast error" role="alert">Automatic publishing is paused because no enabled Publisher identity is verified.</div>}
     <div className="panel">
-      <div className="panel-head"><div><p className="eyebrow">Download jobs</p><h3>{downloads.length} operations · {actionableDownloads} actionable</h3></div><ActionForm action={processPendingDownloads} className="inline-form download-run-form"><label>Limit<input name="limit" type="number" min="1" max="1000" defaultValue={settings.downloadBatchLimit} required /></label><SubmitButton className="button primary" pending="Processing downloads…">Process pending now</SubmitButton></ActionForm></div>
-      <DownloadProgress />
+      <div className="panel-head"><div><p className="eyebrow">Download jobs</p><h3>{downloads.length} operations · {actionableDownloads} actionable</h3></div><ActionForm action={processPendingDownloads} className="inline-form download-run-form"><label>Limit<input name="limit" type="number" min="1" max="1000" defaultValue={settings.downloadBatchLimit} required /></label><SubmitButton className="button primary" pending="Starting downloads…">Process pending now</SubmitButton></ActionForm></div>
       {downloads.length === 0 ? <Empty>No download jobs in the queue.</Empty> : <div className="table-wrap queue-table-wrap"><table className="queue-table">
         <thead><tr><th>Select</th><th>Source post</th><th>Status</th><th>Attempts</th><th>Next attempt</th><th>Error</th><th>Actions</th></tr></thead>
         <tbody>{downloads.map((job) => <tr key={job.id}>

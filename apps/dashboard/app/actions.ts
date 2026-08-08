@@ -10,7 +10,7 @@ import { CollectionService, PlaywrightTimelineBrowser, XPlaywrightCollector } fr
 import { applyStoredSettings, browserBindingFingerprint, browserIds, loadConfig } from "@cenblu/config";
 import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, NotificationOutboxRepository, OperationalEventRepository, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
-import { DownloadService, FfmpegPerceptualVideoHasher, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, verifyDownloadBinaries, YtDlpService } from "@cenblu/downloader";
+import { FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, FfmpegPerceptualVideoHasher } from "@cenblu/downloader";
 import { createPublishNotifier, NotificationEmitter, TelegramTransport, type NotificationChannel } from "@cenblu/notifications";
 import { DiscordDmTransport } from "@cenblu/discord-bot";
 import { buildBatchSchedule } from "@cenblu/scheduler";
@@ -19,6 +19,7 @@ import { discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChrom
 import { combineExclusiveLeases, ResourceBusyError } from "@cenblu/shared/lease";
 import pino from "pino";
 import { scheduleFromFields } from "./lib/schedule";
+import { triggerPendingDownloads } from "./lib/download-runner";
 
 const username = z.string().trim().regex(/^[A-Za-z0-9_]{1,15}$/);
 const id = z.string().min(1);
@@ -443,29 +444,6 @@ export async function recoverIncorrectPublishedPost(formData: FormData) {
   refresh("/published", "/review", "/queue", "/");
 }
 
-async function dashboardDownloader() {
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const runner = new NodeProcessRunner();
-  await verifyDownloadBinaries(runner, { ytDlp: config.ytDlpBinary, ffmpeg: config.ffmpegBinary, ffprobe: config.ffprobeBinary });
-  return {
-    config,
-    repository: new DownloadRepository(prisma),
-    service: new DownloadService(
-      new DownloadRepository(prisma),
-      new YtDlpService(runner, config.ytDlpBinary, config.ffmpegBinary, config.playwrightProfileDirectory ? resolve(config.playwrightProfilePath, config.playwrightProfileDirectory) : config.playwrightProfilePath, config.collectorBrowserId, async (collectorIdentityId) => {
-        const identity = await prisma.browserIdentity.findUniqueOrThrow({ where: { id: collectorIdentityId } });
-        const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-        return { profilePath: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.collectorBrowserId, runExclusive: (operation: () => Promise<void>) => lease.run(operation) };
-      }),
-      new FfprobeService(runner, config.ffprobeBinary),
-      new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath),
-      pino({ level: "silent" }),
-      3,
-      new FfmpegPerceptualVideoHasher(runner, config.ffmpegBinary),
-    ),
-  };
-}
-
 async function buildNotificationEmitter(config: ReturnType<typeof applyStoredSettings>) {
   const settings = await new SettingsRepository(prisma).getAll();
   const hasAnyChannel = (config.telegramBotToken && settings.TELEGRAM_CHAT_ID) || (config.discordBotToken && config.discordOwnerId && settings.NOTIFICATIONS_DISCORD_ENABLED === "true");
@@ -540,32 +518,17 @@ export async function publishNow(formData: FormData) {
 
 export async function downloadNow(formData: FormData) {
   const jobId = id.parse(formData.get("jobId"));
-  const download = await prisma.downloadJob.findUniqueOrThrow({ where: { id: jobId }, select: { sourcePostId: true } });
-  const { config, repository, service } = await dashboardDownloader();
+  const repository = new DownloadRepository(prisma);
   await repository.requestNow(jobId);
-  if (!await service.processJob(jobId)) throw new Error("Download job could not be claimed");
-  const scheduled = await new SchedulerRepository(prisma).scheduleDownloadedAsset(download.sourcePostId, (source) => resolveCaption(source, config.captionTemplates));
-  if (!scheduled) throw new Error("This post is no longer eligible for Review.");
+  await triggerPendingDownloads(1);
   refresh("/", "/queue", "/downloads");
 }
 
 export async function processPendingDownloads(formData?: FormData) {
-  const { config, service } = await dashboardDownloader();
-  const limit = formData?.has("limit") ? z.coerce.number().int().min(1).max(1_000).parse(formData.get("limit")) : config.downloadBatchLimit;
-  const runtime = new RuntimeStatusRepository(prisma);
-  await runtime.update("dashboard-downloader", "RUNNING", JSON.stringify({ processed: 0, limit }));
-  try {
-    const processed = await service.processPending(config.downloadConcurrency, limit, async (count) => {
-      await runtime.update("dashboard-downloader", "RUNNING", JSON.stringify({ processed: count, limit }));
-    });
-    await runtime.update("dashboard-downloader", "IDLE", JSON.stringify({ processed, limit }));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await runtime.update("dashboard-downloader", "ERROR", JSON.stringify({ processed: 0, limit }), message);
-    throw error;
-  }
-  await new SchedulerRepository(prisma).scheduleDownloadedAssets(new Date(), 0, (source) => resolveCaption(source, config.captionTemplates));
+  const limit = formData?.has("limit") ? z.coerce.number().int().min(1).max(1_000).parse(formData.get("limit")) : undefined;
+  const started = await triggerPendingDownloads(limit);
   refresh("/", "/queue", "/downloads");
+  redirect(`/queue?${started ? "downloadStarted=1" : "downloadBusy=1"}`);
 }
 
 export async function bulkRetryDownloads(formData: FormData) {
@@ -577,10 +540,9 @@ export async function bulkRetryDownloads(formData: FormData) {
 
 export async function bulkDownloadNow(formData: FormData) {
   await bulkRetryDownloads(formData);
-  const { config, service } = await dashboardDownloader();
-  await service.processPending(config.downloadConcurrency, config.downloadBatchLimit);
-  await new SchedulerRepository(prisma).scheduleDownloadedAssets(new Date(), 0, (source) => resolveCaption(source, config.captionTemplates));
+  await triggerPendingDownloads();
   refresh("/", "/queue", "/downloads");
+  redirect("/queue?downloadStarted=1");
 }
 
 export async function removeMedia(formData: FormData) {
