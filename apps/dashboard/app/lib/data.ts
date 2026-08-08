@@ -233,6 +233,47 @@ export async function getLogs(filters: { level?: string; component?: string } = 
 }
 
 export type VideoFileEntry = { sourcePostId: string; platformPostId: string; fileName: string; fileSize: number; sourceUsername: string | null; sourceUrl: string | null; caption: string | null; status: string; running: boolean };
+
+export type StorageUsage = {
+  totalBytes: number;
+  videoBytes: number;
+  fileCount: number;
+};
+
+async function directorySize(directory: string): Promise<{ bytes: number; files: number }> {
+  try {
+    const entries = await readdir(directory, { withFileTypes: true });
+    let bytes = 0;
+    let files = 0;
+    for (const entry of entries) {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) {
+        const nested = await directorySize(path);
+        bytes += nested.bytes;
+        files += nested.files;
+      } else if (entry.isFile()) {
+        try { bytes += (await stat(path)).size; files += 1; } catch { /* skip */ }
+      }
+    }
+    return { bytes, files };
+  } catch { return { bytes: 0, files: 0 }; }
+}
+
+export async function getStorageUsage(): Promise<StorageUsage> {
+  const config = loadConfig();
+  const roots = [config.videoStoragePath, config.thumbnailStoragePath, config.tempStoragePath, config.logStoragePath, config.backupStoragePath, resolve(config.repositoryRoot, "storage", "browser-profiles")];
+  let totalBytes = 0;
+  let videoBytes = 0;
+  let fileCount = 0;
+  for (const root of roots) {
+    const usage = await directorySize(root);
+    totalBytes += usage.bytes;
+    fileCount += usage.files;
+    if (root === config.videoStoragePath) videoBytes = usage.bytes;
+  }
+  return { totalBytes, videoBytes, fileCount };
+}
+
 export async function getVideoFiles(): Promise<VideoFileEntry[]> {
   const storage = loadConfig().videoStoragePath;
   let names: string[];
