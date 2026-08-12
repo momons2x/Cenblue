@@ -75,7 +75,7 @@
     "@cenblu/publisher": "workspace:*",
     "@cenblu/scheduler": "workspace:*",
     "@cenblu/shared": "workspace:*",
-    "@prisma/client": "^6.19.0",
+    "@prisma/client": "^7.9.1",
     "discord.js": "^14.27.0",
     "dotenv": "17.4.2",
     "node-cron": "4.6.0",
