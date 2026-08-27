@@ -1,5 +1,8 @@
-import "dotenv/config";
-import { relative, resolve } from "node:path";
+import { config as loadDotenv } from "dotenv";
+import { dirname, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+loadDotenv({ path: resolve(dirname(fileURLToPath(import.meta.url)), "../../../.env") });
 import { z } from "zod";
 
 const booleanFromEnvironment = z.enum(["true", "false"]).transform((value) => value === "true");
