@@ -8,6 +8,7 @@ const globalState = globalThis as typeof globalThis & { __cenbluDiscordBot?: Bot
 
 export async function startDiscordBot(): Promise<void> {
   if (globalState.__cenbluDiscordBot?.started) return;
+  if (!process.env.CENBLU_ROOT || !process.env.DATABASE_URL) return;
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   if (!config.discordBotToken || !config.discordOwnerId) return;
   const logger = pino({ name: "discord-bot" });
