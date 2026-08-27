@@ -215,7 +215,8 @@ Instead of assigning each post a time by hand, approve a set of posts at once an
 
 Cenblue shuffles the selected posts, spreads them evenly across the **active window**, and adds **random jitter** so the timing looks human. Nothing posts during the quiet hours between the window's end and the next day's start. When the batch is larger than one day's window, the remaining posts **auto-spill into the following days** with the same active hours and per-day spacing until every selected post has a time. Configure the window and jitter under **Settings → Publishing → Batch schedule**:
 
-- `SCHEDULE_ACTIVE_START` / `SCHEDULE_ACTIVE_END` — the only hours posts can land (default `09:00`–`22:00`; this is the "no posts overnight" quiet period). A window whose end is earlier than its start crosses midnight — posts land in the afternoon/night and the daytime stays quiet. Start and end must be different times.
+- `SCHEDULE_ACTIVE_START` / `SCHEDULE_ACTIVE_END` — the primary active window (default `09:00`–`22:00`). A window whose end is earlier than its start crosses midnight — posts land in the afternoon/night and the daytime stays quiet. Start and end must be different times.
+- `SCHEDULE_ACTIVE_WINDOWS` — optional JSON array for up to 2 non-overlapping windows (e.g. morning + evening). Posts are distributed proportionally across both windows.
 - `SCHEDULE_JITTER_MINUTES` — random ±offset per slot (default `10`).
 - `SCHEDULE_MIN_GAP_MINUTES` — minimum spacing between posts (default `15`).
 - `DAILY_POST_MINIMUM` / `DAILY_POST_PREFERRED` — the default number of posts when no per-batch override is given.

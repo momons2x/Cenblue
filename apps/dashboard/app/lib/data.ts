@@ -120,6 +120,7 @@ export async function getSettings() {
     dailyPreferred: stored.DAILY_POST_PREFERRED ?? "3",
     scheduleActiveStart: stored.SCHEDULE_ACTIVE_START ?? config.scheduleActiveStart,
     scheduleActiveEnd: stored.SCHEDULE_ACTIVE_END ?? config.scheduleActiveEnd,
+    scheduleActiveWindows: config.scheduleActiveWindows,
     scheduleJitterMinutes: stored.SCHEDULE_JITTER_MINUTES ?? String(config.scheduleJitterMinutes),
     scheduleMinGapMinutes: stored.SCHEDULE_MIN_GAP_MINUTES ?? String(config.scheduleMinGapMinutes),
     notificationsEnabled: stored.NOTIFICATIONS_ENABLED ?? "false",

@@ -47,7 +47,7 @@ Video preview in the Review modal is hidden by default. Set **Settings → Revie
 
 Set a valid IANA `APP_TIMEZONE` in Settings before relying on automatic publishing. Schedule controls use native date and time inputs in that timezone on every device. A blank Review schedule is manual-only; use **Publish now** from Queue when ready. Automatic dashboard and pipeline owners process only due jobs with a non-null schedule. The Queue marks a due job that auto-publishing cannot run with an amber warning row naming the blocking condition, so check those rows first when a scheduled post is missing.
 
-For batch scheduling, configure the active window, jitter, and minimum gap under **Settings → Publishing → Batch schedule**. Review's **Batch schedule** action shuffles the selected posts and auto-assigns staggered times within the window, honoring the optional "Posts today" override (falling back to the daily minimum/preferred settings). Nothing is scheduled during the quiet hours outside the active window.
+For batch scheduling, configure the active windows, jitter, and minimum gap under **Settings → Batch schedule**. You can set up to 2 non-overlapping windows (e.g. morning + evening), and posts are distributed proportionally across both. Review's **Batch schedule** action shuffles the selected posts and auto-assigns staggered times within the windows, honoring the optional "Posts today" override (falling back to the daily minimum/preferred settings). Nothing is scheduled during the quiet hours outside the active windows.
 
 ## Restore Outline
 

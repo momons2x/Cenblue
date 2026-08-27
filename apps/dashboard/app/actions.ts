@@ -361,8 +361,7 @@ export async function scheduleBatchReview(formData: FormData) {
   const schedule = buildBatchSchedule({
     jobs: jobs.map((job) => ({ id: job.id })),
     timeZone: config.timezone,
-    activeStart: config.scheduleActiveStart,
-    activeEnd: config.scheduleActiveEnd,
+    activeWindows: config.scheduleActiveWindows,
     jitterMinutes: config.scheduleJitterMinutes,
     minGapMinutes: config.scheduleMinGapMinutes,
     postsPerDay: countOverride,
@@ -913,6 +912,26 @@ export async function assignSourceCollector(formData: FormData) {
 export async function saveSettings(formData: FormData) {
   const timezone = z.string().min(1).parse(formData.get("timezone"));
   try { new Intl.DateTimeFormat("en", { timeZone: timezone }); } catch { throw new Error("Enter a valid IANA timezone such as Asia/Jakarta."); }
+  const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;
+  const starts = formData.getAll("scheduleActiveStart").map(String).filter(Boolean);
+  const ends = formData.getAll("scheduleActiveEnd").map(String).filter(Boolean);
+  if (starts.length === 0 || starts.length !== ends.length) throw new Error("Each active window needs a start and end time.");
+  if (starts.length > 2) throw new Error("At most 2 active windows are supported.");
+  const windows: Array<{ start: string; end: string }> = [];
+  for (let i = 0; i < starts.length; i += 1) {
+    if (!timeRe.test(starts[i])) throw new Error(`Window ${i + 1} start must be HH:MM.`);
+    if (!timeRe.test(ends[i])) throw new Error(`Window ${i + 1} end must be HH:MM.`);
+    if (starts[i] === ends[i]) throw new Error(`Window ${i + 1} start and end must be different times.`);
+    windows.push({ start: starts[i], end: ends[i] });
+  }
+  if (windows.length === 2) {
+    const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+    const aStart = toMin(windows[0].start);
+    const aEnd = toMin(windows[0].end) <= aStart ? toMin(windows[0].end) + 1440 : toMin(windows[0].end);
+    const bStart = toMin(windows[1].start);
+    const bEnd = toMin(windows[1].end) <= bStart ? toMin(windows[1].end) + 1440 : toMin(windows[1].end);
+    if (aStart < bEnd && bStart < aEnd) throw new Error("Active windows must not overlap.");
+  }
   const values = {
     COLLECTION_INTERVAL_MINUTES: String(z.coerce.number().int().min(1).max(59).parse(formData.get("collectionIntervalMinutes"))),
     POSTS_PER_SOURCE: String(z.coerce.number().int().min(1).max(100).parse(formData.get("postsPerSource"))),
@@ -926,14 +945,13 @@ export async function saveSettings(formData: FormData) {
     SOURCE_ACCOUNT_LIMIT: String(z.coerce.number().int().min(1).max(100).parse(formData.get("sourceAccountLimit"))),
     DAILY_POST_MINIMUM: String(z.coerce.number().int().min(0).max(20).parse(formData.get("dailyMinimum"))),
     DAILY_POST_PREFERRED: String(z.coerce.number().int().min(0).max(20).parse(formData.get("dailyPreferred"))),
-    SCHEDULE_ACTIVE_START: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Active window start must be HH:MM").parse(formData.get("scheduleActiveStart")),
-    SCHEDULE_ACTIVE_END: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Active window end must be HH:MM").parse(formData.get("scheduleActiveEnd")),
+    SCHEDULE_ACTIVE_START: windows[0].start,
+    SCHEDULE_ACTIVE_END: windows[0].end,
+    SCHEDULE_ACTIVE_WINDOWS: JSON.stringify(windows),
     SCHEDULE_JITTER_MINUTES: String(z.coerce.number().int().min(0).max(120).parse(formData.get("scheduleJitterMinutes"))),
     SCHEDULE_MIN_GAP_MINUTES: String(z.coerce.number().int().min(0).max(180).parse(formData.get("scheduleMinGapMinutes"))),
     APP_TIMEZONE: timezone,
   };
-  const toMinutes = (value: string) => Number(value.slice(0, 2)) * 60 + Number(value.slice(3, 5));
-  if (toMinutes(values.SCHEDULE_ACTIVE_START) === toMinutes(values.SCHEDULE_ACTIVE_END)) throw new Error("Active window start and end must be different times.");
   await new SettingsRepository(prisma).setMany(values);
   refresh("/settings", "/");
 }

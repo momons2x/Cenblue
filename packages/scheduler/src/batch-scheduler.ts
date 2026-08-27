@@ -3,8 +3,7 @@ import { Temporal } from "@js-temporal/polyfill";
 export type BatchScheduleInput = {
   jobs: Array<{ id: string }>;
   timeZone: string;
-  activeStart: string;
-  activeEnd: string;
+  activeWindows: Array<{ start: string; end: string }>;
   jitterMinutes: number;
   minGapMinutes: number;
   postsPerDay?: number;
@@ -32,6 +31,10 @@ function shuffle<T>(items: T[], random: () => number): T[] {
   return copy;
 }
 
+function toMinutes(time: { hour: number; minute: number }): number {
+  return time.hour * 60 + time.minute;
+}
+
 function dayWindow(day: Temporal.PlainDate, timeZone: string, start: { hour: number; minute: number }, end: { hour: number; minute: number }): { startMs: number; endMs: number } {
   const startMs = day.toZonedDateTime({ timeZone, plainTime: new Temporal.PlainTime(start.hour, start.minute) }).epochMilliseconds;
   const endDay = start.hour * 60 + start.minute < end.hour * 60 + end.minute ? day : day.add({ days: 1 });
@@ -40,6 +43,7 @@ function dayWindow(day: Temporal.PlainDate, timeZone: string, start: { hour: num
 }
 
 function assignSlots(count: number, startMs: number, endMs: number, minGapMs: number, jitterMs: number, random: () => number): number[] {
+  if (count === 0) return [];
   const windowMs = endMs - startMs;
   const idealGapMs = windowMs / count;
   const times: number[] = [];
@@ -60,20 +64,53 @@ function assignSlots(count: number, startMs: number, endMs: number, minGapMs: nu
   return times;
 }
 
+function distributeProportionally(totalCount: number, windowMinutes: number[], totalMinutes: number): number[] {
+  if (totalCount === 0) return windowMinutes.map(() => 0);
+  const raw = windowMinutes.map((m) => m / totalMinutes * totalCount);
+  const assigned = raw.map((r) => Math.floor(r));
+  let remaining = totalCount - assigned.reduce((a, b) => a + b, 0);
+  const fractional = raw.map((r, i) => ({ i, frac: r - Math.floor(r) })).sort((a, b) => b.frac - a.frac);
+  for (const entry of fractional) {
+    if (remaining <= 0) break;
+    assigned[entry.i] += 1;
+    remaining -= 1;
+  }
+  return assigned;
+}
+
 export function buildBatchSchedule(input: BatchScheduleInput): ScheduledJob[] {
   const jobs = input.jobs;
   if (jobs.length === 0) return [];
   const random = input.random ?? Math.random;
-  const start = parseTime(input.activeStart);
-  const end = parseTime(input.activeEnd);
-  if (start.hour * 60 + start.minute === end.hour * 60 + end.minute) throw new Error("The schedule active window start and end must be different times.");
+  const windows = input.activeWindows;
+  if (windows.length === 0 || windows.length > 2) throw new Error("Schedule must have 1 or 2 active windows.");
+
+  const parsedWindows = windows.map((w) => ({ start: parseTime(w.start), end: parseTime(w.end) }));
+  for (const w of parsedWindows) {
+    if (toMinutes(w.start) === toMinutes(w.end)) throw new Error(`Active window start and end must be different times (${w.start.hour}:${String(w.start.minute).padStart(2, "0")}).`);
+  }
+  if (parsedWindows.length === 2) {
+    const a = parsedWindows[0];
+    const b = parsedWindows[1];
+    const aStart = toMinutes(a.start);
+    const aEnd = toMinutes(a.end) <= aStart ? toMinutes(a.end) + 1440 : toMinutes(a.end);
+    const bStart = toMinutes(b.start);
+    const bEnd = toMinutes(b.end) <= bStart ? toMinutes(b.end) + 1440 : toMinutes(b.end);
+    if (aStart < bEnd && bStart < aEnd) throw new Error("Active windows must not overlap.");
+  }
 
   const day = Temporal.PlainDate.from(input.targetDay);
-  const { startMs: dayStartMs, endMs: dayEndMs } = dayWindow(day, input.timeZone, start, end);
-  const windowMs = dayEndMs - dayStartMs;
   const minGapMs = Math.max(0, input.minGapMinutes) * 60_000;
   const jitterMs = Math.max(0, input.jitterMinutes) * 60_000;
-  const perDayCap = Math.max(1, Math.min(input.postsPerDay ?? Infinity, windowMs <= 0 || minGapMs === 0 ? Infinity : Math.floor(windowMs / minGapMs)));
+
+  const dayWindowsAll = parsedWindows.map((w) => dayWindow(day, input.timeZone, w.start, w.end));
+  const windowMinutes = dayWindowsAll.map((dw) => (dw.endMs - dw.startMs) / 60_000);
+  const totalMinutes = windowMinutes.reduce((a, b) => a + b, 0);
+  const totalWindowMs = totalMinutes * 60_000;
+  const perDayCap = Math.max(1, Math.min(
+    input.postsPerDay ?? Infinity,
+    totalWindowMs <= 0 || minGapMs === 0 ? Infinity : Math.floor(totalWindowMs / minGapMs),
+  ));
 
   const shuffled = shuffle(jobs, random);
   const result: ScheduledJob[] = [];
@@ -81,11 +118,21 @@ export function buildBatchSchedule(input: BatchScheduleInput): ScheduledJob[] {
   let dayOffset = 0;
   while (remaining.length > 0) {
     if (dayOffset > 366) throw new Error("The selected posts do not fit within a year of scheduling days.");
-    const window = dayWindow(day.add({ days: dayOffset }), input.timeZone, start, end);
-    const slots = Math.min(perDayCap, remaining.length);
-    const times = assignSlots(slots, window.startMs, window.endMs, minGapMs, jitterMs, random);
-    for (let index = 0; index < slots; index += 1) {
-      result.push({ jobId: remaining[index].id, scheduledFor: new Date(times[index]) });
+    const todayWindows = parsedWindows.map((w) => dayWindow(day.add({ days: dayOffset }), input.timeZone, w.start, w.end));
+    const todayMinutes = todayWindows.map((dw) => (dw.endMs - dw.startMs) / 60_000);
+    const todayTotalMs = todayMinutes.reduce((a, b) => a + b, 0) * 60_000;
+    const todayCap = Math.max(1, Math.min(perDayCap, todayTotalMs <= 0 || minGapMs === 0 ? Infinity : Math.floor(todayTotalMs / minGapMs)));
+    const slots = Math.min(todayCap, remaining.length);
+    const perWindow = distributeProportionally(slots, todayMinutes, todayMinutes.reduce((a, b) => a + b, 0));
+    let jobIndex = 0;
+    for (let wIdx = 0; wIdx < todayWindows.length; wIdx += 1) {
+      const winSlots = perWindow[wIdx];
+      const win = todayWindows[wIdx];
+      const times = assignSlots(winSlots, win.startMs, win.endMs, minGapMs, jitterMs, random);
+      for (let sIdx = 0; sIdx < times.length; sIdx += 1) {
+        result.push({ jobId: remaining[jobIndex].id, scheduledFor: new Date(times[sIdx]) });
+        jobIndex += 1;
+      }
     }
     remaining = remaining.slice(slots);
     dayOffset += 1;

@@ -5,8 +5,7 @@ const timeZone = "Asia/Jakarta";
 const jobs = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `job-${index}` }));
 const base = {
   timeZone,
-  activeStart: "09:00",
-  activeEnd: "22:00",
+  activeWindows: [{ start: "09:00", end: "22:00" }],
   jitterMinutes: 0,
   minGapMinutes: 0,
   targetDay: "2026-08-10",
@@ -107,7 +106,7 @@ describe("buildBatchSchedule", () => {
   });
 
   it("supports a midnight-crossing active window", () => {
-    const result = buildBatchSchedule({ ...base, activeStart: "14:25", activeEnd: "04:00", jobs: jobs(5), jitterMinutes: 5, minGapMinutes: 25 });
+    const result = buildBatchSchedule({ ...base, activeWindows: [{ start: "14:25", end: "04:00" }], jobs: jobs(5), jitterMinutes: 5, minGapMinutes: 25 });
     expect(result).toHaveLength(5);
     const sorted = [...result.map((entry) => entry.scheduledFor.getTime())].sort((a, b) => a - b);
     for (let index = 1; index < sorted.length; index += 1) {
@@ -120,7 +119,7 @@ describe("buildBatchSchedule", () => {
   });
 
   it("spills an overnight window across following nights", () => {
-    const result = buildBatchSchedule({ ...base, activeStart: "14:25", activeEnd: "04:00", jobs: jobs(40), minGapMinutes: 25 });
+    const result = buildBatchSchedule({ ...base, activeWindows: [{ start: "14:25", end: "04:00" }], jobs: jobs(40), minGapMinutes: 25 });
     expect(result).toHaveLength(40);
     const nights = new Set(result.map((entry) => nightOf(entry.scheduledFor, timeZone)));
     expect(nights.size).toBe(2);
@@ -131,6 +130,78 @@ describe("buildBatchSchedule", () => {
   });
 
   it("rejects an empty (equal-time) active window", () => {
-    expect(() => buildBatchSchedule({ ...base, activeStart: "22:00", activeEnd: "22:00", jobs: jobs(2) })).toThrow(/must be different times/);
+    expect(() => buildBatchSchedule({ ...base, activeWindows: [{ start: "22:00", end: "22:00" }], jobs: jobs(2) })).toThrow(/must be different times/);
+  });
+
+  it("distributes slots proportionally across two windows", () => {
+    const result = buildBatchSchedule({
+      ...base,
+      activeWindows: [{ start: "09:00", end: "12:00" }, { start: "18:00", end: "20:00" }],
+      jobs: jobs(10),
+      jitterMinutes: 0,
+      minGapMinutes: 0,
+    });
+    expect(result).toHaveLength(10);
+    let morning = 0;
+    let evening = 0;
+    for (const entry of result) {
+      const hour = Number(hourOf(entry.scheduledFor, timeZone));
+      if (hour >= 9 && hour < 12) morning += 1;
+      else if (hour >= 18 && hour < 20) evening += 1;
+    }
+    expect(morning).toBeGreaterThanOrEqual(5);
+    expect(evening).toBeGreaterThanOrEqual(3);
+    expect(morning + evening).toBe(10);
+  });
+
+  it("keeps minGapMinutes within each window of a two-window day", () => {
+    const result = buildBatchSchedule({
+      ...base,
+      activeWindows: [{ start: "09:00", end: "12:00" }, { start: "18:00", end: "21:00" }],
+      jobs: jobs(8),
+      jitterMinutes: 0,
+      minGapMinutes: 15,
+    });
+    const morning: number[] = [];
+    const evening: number[] = [];
+    for (const entry of result) {
+      const hour = Number(hourOf(entry.scheduledFor, timeZone));
+      if (hour >= 9 && hour < 12) morning.push(entry.scheduledFor.getTime());
+      else evening.push(entry.scheduledFor.getTime());
+    }
+    for (const group of [morning, evening]) {
+      const sorted = group.sort((a, b) => a - b);
+      for (let index = 1; index < sorted.length; index += 1) {
+        expect(sorted[index] - sorted[index - 1]).toBeGreaterThanOrEqual(15 * 60_000);
+      }
+    }
+  });
+
+  it("rejects overlapping windows", () => {
+    expect(() => buildBatchSchedule({
+      ...base,
+      activeWindows: [{ start: "09:00", end: "14:00" }, { start: "12:00", end: "18:00" }],
+      jobs: jobs(4),
+    })).toThrow(/overlap/);
+  });
+
+  it("rejects more than two windows", () => {
+    expect(() => buildBatchSchedule({
+      ...base,
+      activeWindows: [{ start: "06:00", end: "09:00" }, { start: "12:00", end: "15:00" }, { start: "18:00", end: "21:00" }],
+      jobs: jobs(4),
+    })).toThrow(/1 or 2/);
+  });
+
+  it("spills two-window posts across days when batch is large", () => {
+    const result = buildBatchSchedule({
+      ...base,
+      activeWindows: [{ start: "09:00", end: "12:00" }, { start: "18:00", end: "20:00" }],
+      jobs: jobs(25),
+      minGapMinutes: 15,
+    });
+    expect(result).toHaveLength(25);
+    const days = new Set(result.map((entry) => dayOf(entry.scheduledFor, timeZone)));
+    expect(days.size).toBeGreaterThanOrEqual(2);
   });
 });

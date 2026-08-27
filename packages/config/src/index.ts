@@ -9,7 +9,7 @@ export const storedConfigKeys = [
   "COLLECTION_INTERVAL_MINUTES", "POSTS_PER_SOURCE", "PUBLISH_INTERVAL_MINUTES", "PLAYWRIGHT_HEADLESS",
   "PUBLISH_MODE", "PUBLISH_MIN_UPLOAD_MBPS", "PUBLISH_MAX_UPLOAD_MINUTES", "DOWNLOAD_CONCURRENCY",
   "DOWNLOAD_BATCH_LIMIT", "SOURCE_ACCOUNT_LIMIT", "CAPTION_TEMPLATES", "APP_TIMEZONE",
-  "SCHEDULE_ACTIVE_START", "SCHEDULE_ACTIVE_END", "SCHEDULE_JITTER_MINUTES", "SCHEDULE_MIN_GAP_MINUTES",
+  "SCHEDULE_ACTIVE_START", "SCHEDULE_ACTIVE_END", "SCHEDULE_ACTIVE_WINDOWS", "SCHEDULE_JITTER_MINUTES", "SCHEDULE_MIN_GAP_MINUTES",
 ] as const;
 
 export const browserIds = ["msedge", "chrome", "brave", "chromium", "vivaldi", "opera", "custom"] as const;
@@ -65,6 +65,7 @@ const environmentSchema = z.object({
   CAPTION_TEMPLATES: z.string().default("{sourceCaption}"),
   SCHEDULE_ACTIVE_START: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Active window start must be HH:MM").default("09:00"),
   SCHEDULE_ACTIVE_END: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Active window end must be HH:MM").default("22:00"),
+  SCHEDULE_ACTIVE_WINDOWS: z.string().optional(),
   SCHEDULE_JITTER_MINUTES: z.coerce.number().int().min(0).max(120).default(10),
   SCHEDULE_MIN_GAP_MINUTES: z.coerce.number().int().min(0).max(180).default(15),
   LOG_MAX_BYTES: z.coerce.number().int().min(10_000).default(5_000_000),
@@ -117,12 +118,33 @@ export type AppConfig = {
   captionTemplates: string;
   scheduleActiveStart: string;
   scheduleActiveEnd: string;
+  scheduleActiveWindows: ScheduleWindow[];
   scheduleJitterMinutes: number;
   scheduleMinGapMinutes: number;
   logMaxBytes: number;
   logRetainedFiles: number;
   backupStoragePath: string;
 };
+
+export type ScheduleWindow = { start: string; end: string };
+
+export function parseScheduleWindows(primary: { start: string; end: string }, jsonOverride?: string): ScheduleWindow[] {
+  if (jsonOverride) {
+    try {
+      const parsed = JSON.parse(jsonOverride);
+      if (Array.isArray(parsed) && parsed.length >= 1 && parsed.length <= 2) {
+        const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;
+        const windows = parsed.map((w: { start?: string; end?: string }) => ({ start: String(w.start ?? ""), end: String(w.end ?? "") }));
+        for (const w of windows) {
+          if (!timeRe.test(w.start) || !timeRe.test(w.end)) throw new Error("Invalid time");
+          if (w.start === w.end) throw new Error("Start and end must be different");
+        }
+        return windows;
+      }
+    } catch { /* fall through to legacy single window */ }
+  }
+  return [{ start: primary.start, end: primary.end }];
+}
 
 export function browserBindingFingerprint(config: AppConfig, role: "collector" | "publisher"): string {
   return JSON.stringify(role === "collector"
@@ -193,6 +215,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     captionTemplates: parsed.CAPTION_TEMPLATES,
     scheduleActiveStart: parsed.SCHEDULE_ACTIVE_START,
     scheduleActiveEnd: parsed.SCHEDULE_ACTIVE_END,
+    scheduleActiveWindows: parseScheduleWindows({ start: parsed.SCHEDULE_ACTIVE_START, end: parsed.SCHEDULE_ACTIVE_END }, parsed.SCHEDULE_ACTIVE_WINDOWS),
     scheduleJitterMinutes: parsed.SCHEDULE_JITTER_MINUTES,
     scheduleMinGapMinutes: parsed.SCHEDULE_MIN_GAP_MINUTES,
     logMaxBytes: parsed.LOG_MAX_BYTES,
@@ -203,6 +226,11 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
 
 export function applyStoredSettings(config: AppConfig, settings: Record<string, string>): AppConfig {
   const allowedSettings = Object.fromEntries(storedConfigKeys.flatMap((key) => settings[key] === undefined ? [] : [[key, settings[key]]]));
+  if (!allowedSettings.SCHEDULE_ACTIVE_WINDOWS && (allowedSettings.SCHEDULE_ACTIVE_START || allowedSettings.SCHEDULE_ACTIVE_END)) {
+    const start = allowedSettings.SCHEDULE_ACTIVE_START ?? config.scheduleActiveStart;
+    const end = allowedSettings.SCHEDULE_ACTIVE_END ?? config.scheduleActiveEnd;
+    allowedSettings.SCHEDULE_ACTIVE_WINDOWS = JSON.stringify([{ start, end }]);
+  }
   const collectorBrowserId = settings.DEVICE_COLLECTOR_BROWSER_ID;
   const publisherBrowserId = settings.DEVICE_PUBLISHER_BROWSER_ID;
   const environment: NodeJS.ProcessEnv = {
