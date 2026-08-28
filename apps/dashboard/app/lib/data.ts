@@ -95,6 +95,7 @@ export async function getSettings() {
     const managedRelative = relative(managedRoot, profilePath);
     return {
       ...identity,
+      dailyPostLimit: identity.dailyPostLimit ?? null,
       profilePath,
       profilePresent: await stat(profilePath).then((entry) => entry.isDirectory()).catch(() => false),
       managed: managedRelative !== "" && !managedRelative.startsWith("..") && !managedRelative.includes(":"),
@@ -193,7 +194,7 @@ export async function getReviewQueue(source?: string, sort = "oldest") {
     return difference || tieBreak(left, right);
   });
   const sources = await prisma.sourceAccount.findMany({ where: { posts: { some: { OR: [{ publishJobs: { some: { status: { in: ["READY_FOR_REVIEW", "MANUAL_ATTENTION", "FAILED"] } } } }, { duplicateGroupId: { not: null }, status: "SKIPPED" }] } } }, orderBy: { username: "asc" }, select: { username: true } });
-  const publishers = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true }, orderBy: { label: "asc" }, select: { id: true, label: true, expectedUsername: true, verifiedAt: true } });
+  const publishers = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true }, orderBy: { label: "asc" }, select: { id: true, label: true, expectedUsername: true, verifiedAt: true, dailyPostLimit: true } });
   return { jobs, duplicates, sources, publishers };
 }
 

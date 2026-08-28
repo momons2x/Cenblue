@@ -155,6 +155,7 @@ model BrowserIdentity {
   verifiedFingerprint String?
   verificationError String?
   profileDeletedAt  DateTime?
+  dailyPostLimit    Int?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
   assignedSources   SourceAccount[] @relation("AssignedCollector")

@@ -28,6 +28,21 @@ const manualImageTypes = { "image/jpeg": "jpg", "image/png": "png", "image/webp"
 
 function refresh(...paths: string[]) { paths.forEach((path) => revalidatePath(path)); }
 
+function splitBetweenPublishers<T extends { id: string }>(jobs: T[], publisherIds: string[]): Map<string, T[]> {
+  const copy = [...jobs];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  const result = new Map<string, T[]>();
+  for (const pid of publisherIds) result.set(pid, []);
+  for (let i = 0; i < copy.length; i += 1) {
+    const pid = publisherIds[i % publisherIds.length];
+    result.get(pid)!.push(copy[i]);
+  }
+  return result;
+}
+
 function inside(root: string, path: string): boolean {
   const value = relative(resolve(root), resolve(path));
   return value !== "" && !value.startsWith("..") && !value.includes(":");
@@ -332,9 +347,15 @@ export async function bulkReview(formData: FormData) {
     const scheduledFor = scheduleFromFields(formData, config.timezone, true);
     if (scheduledFor && scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
     const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
-    for (const jobId of jobIds) {
+    const allJobs = await Promise.all(jobIds.map(async (jobId) => {
       const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: jobId } });
-      await repository.approveTargets(jobId, publisherIdentityIds, scheduledFor, job.caption);
+      return { id: jobId, caption: job.caption };
+    }));
+    const split = splitBetweenPublishers(allJobs, publisherIdentityIds);
+    for (const [publisherId, jobs] of split) {
+      for (const job of jobs) {
+        await repository.approveTargets(job.id, [publisherId], scheduledFor, job.caption);
+      }
     }
   } else if (decision === "reject") {
     for (const jobId of jobIds) await repository.reject(jobId);
@@ -358,27 +379,32 @@ export async function scheduleBatchReview(formData: FormData) {
   const publishers = await prisma.browserIdentity.findMany({ where: { id: { in: publisherIdentityIds }, role: "PUBLISHER", enabled: true } });
   if (publishers.length !== new Set(publisherIdentityIds).size) throw new Error("One or more selected Publisher identities are unavailable.");
 
-  const schedule = buildBatchSchedule({
-    jobs: jobs.map((job) => ({ id: job.id })),
-    timeZone: config.timezone,
-    activeWindows: config.scheduleActiveWindows,
-    jitterMinutes: config.scheduleJitterMinutes,
-    minGapMinutes: config.scheduleMinGapMinutes,
-    postsPerDay: countOverride,
-    targetDay,
-  });
-
+  const split = splitBetweenPublishers(jobs, publisherIdentityIds);
   const repository = new PublishRepository(prisma);
-  for (const jobId of jobIds) {
-    const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: jobId } });
-    await repository.approveTargets(jobId, publisherIdentityIds, schedule.find((entry) => entry.jobId === jobId)?.scheduledFor ?? null, job.caption);
+  const allScheduled: Array<{ jobId: string; scheduledFor: Date }> = [];
+  for (const [publisherId, publisherJobs] of split) {
+    if (publisherJobs.length === 0) continue;
+    const schedule = buildBatchSchedule({
+      jobs: publisherJobs.map((job) => ({ id: job.id })),
+      timeZone: config.timezone,
+      activeWindows: config.scheduleActiveWindows,
+      jitterMinutes: config.scheduleJitterMinutes,
+      minGapMinutes: config.scheduleMinGapMinutes,
+      postsPerDay: countOverride,
+      targetDay,
+    });
+    allScheduled.push(...schedule);
+    for (const entry of schedule) {
+      const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: entry.jobId } });
+      await repository.approveTargets(entry.jobId, [publisherId], entry.scheduledFor, job.caption);
+    }
   }
   refresh("/review", "/queue", "/");
-  const first = schedule[0]?.scheduledFor;
-  const last = schedule[schedule.length - 1]?.scheduledFor;
-  const intervalMinutes = schedule.length > 1 && first && last ? Math.round((last.getTime() - first.getTime()) / (schedule.length - 1) / 60_000) : 0;
+  const first = allScheduled[0]?.scheduledFor;
+  const last = allScheduled[allScheduled.length - 1]?.scheduledFor;
+  const intervalMinutes = allScheduled.length > 1 && first && last ? Math.round((last.getTime() - first.getTime()) / (allScheduled.length - 1) / 60_000) : 0;
   const formatDay = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(date);
-  redirect(`/review?batchScheduled=${schedule.length}&batchDay=${formatDay(first ?? new Date())}&batchEndDay=${last ? formatDay(last) : formatDay(first ?? new Date())}&batchInterval=${intervalMinutes}&batchFirst=${first ? first.toISOString() : ""}`);
+  redirect(`/review?batchScheduled=${allScheduled.length}&batchDay=${formatDay(first ?? new Date())}&batchEndDay=${last ? formatDay(last) : formatDay(first ?? new Date())}&batchInterval=${intervalMinutes}&batchFirst=${first ? first.toISOString() : ""}`);
 }
 
 
@@ -836,6 +862,14 @@ export async function toggleIdentityAutomatic(formData: FormData) {
   const identityId = id.parse(formData.get("identityId"));
   const automatic = z.enum(["true", "false"]).transform((value) => value === "true").parse(formData.get("automatic"));
   await new BrowserIdentityRepository(prisma).setAutomatic(identityId, automatic);
+  refresh("/settings", "/");
+}
+
+export async function updateIdentityDailyLimit(formData: FormData) {
+  const identityId = id.parse(formData.get("identityId"));
+  const rawLimit = String(formData.get("dailyPostLimit") ?? "").trim();
+  const dailyPostLimit = rawLimit === "" ? null : z.coerce.number().int().min(1).max(200).parse(rawLimit);
+  await prisma.browserIdentity.update({ where: { id: identityId }, data: { dailyPostLimit } });
   refresh("/settings", "/");
 }
 

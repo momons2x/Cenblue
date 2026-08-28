@@ -48,7 +48,7 @@ function CompressionSubmit() {
   </div>;
 }
 
-export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: ReviewItem[]; timeZone: string; publishers: { id: string; label: string; expectedUsername: string | null; verifiedAt: Date | null }[]; reviewers: { previewEnabled: boolean } }) {
+export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: ReviewItem[]; timeZone: string; publishers: { id: string; label: string; expectedUsername: string | null; verifiedAt: Date | null; dailyPostLimit: number | null }[]; reviewers: { previewEnabled: boolean } }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [compressing, setCompressing] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(reviewers.previewEnabled);
@@ -100,7 +100,7 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
               <label className="grid gap-2 text-xs font-semibold text-muted">Caption<textarea className="min-h-32 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="caption" defaultValue={selected.caption} maxLength={280} required disabled={compressing} /></label>
               <label className="grid gap-2 text-xs font-semibold text-muted">Internal notes<textarea className="min-h-24 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="reviewNotes" defaultValue={selected.sourcePost.reviewNotes ?? ""} maxLength={2000} disabled={compressing} /></label>
               <label className="grid gap-2 text-xs font-semibold text-muted">Tags<input className="w-full rounded-sm border border-line bg-surface px-3 py-2 text-sm text-ink" name="internalTags" defaultValue={selected.sourcePost.internalTags ?? ""} maxLength={500} disabled={compressing} /></label>
-              <fieldset className="publisher-targets"><legend>Publish to</legend>{publishers.map((publisher) => <label key={publisher.id}><input type="checkbox" name="publisherIdentityId" value={publisher.id} disabled={compressing} /><span>{publisher.label} (@{publisher.expectedUsername}){publisher.verifiedAt ? "" : " · needs verification"}</span></label>)}</fieldset>
+              <fieldset className="publisher-targets"><legend>Publish to</legend>{publishers.map((publisher) => <label key={publisher.id}><input type="checkbox" name="publisherIdentityId" value={publisher.id} disabled={compressing} /><span>{publisher.label} (@{publisher.expectedUsername}){publisher.verifiedAt ? "" : " · needs verification"}{publisher.dailyPostLimit == null ? <span className="publisher-tier-badge premium">Premium</span> : <span className="publisher-tier-badge free">Free · {publisher.dailyPostLimit}/day</span>}</span></label>)}</fieldset>
               <div><span className="mb-2 block text-xs font-semibold text-muted">Schedule (optional)</span><ScheduleField value={selected.scheduledFor} timeZone={timeZone} optional /></div>
               <ReviewSaveButtons locked={compressing} />
             </form>
