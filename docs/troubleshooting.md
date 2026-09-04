@@ -14,7 +14,7 @@ After profile deletion, the card must show **Deleted** and a success message. If
 
 ## Queue Failures
 
-Inspect `lastError`, attempt count, retry time, and current status. Never force a `COMPLETED` publication. Verify X before resolving `MANUAL_ATTENTION`.
+Inspect `lastError`, attempt count, retry time, and current status. Never force a `COMPLETED` publication. Verify X before resolving `MANUAL_ATTENTION`. If a published job appears stuck with an inconsistent status, the auto-publisher will self-heal it to `COMPLETED` on the next attempt.
 
 Check the amber warning rows first: a due job that auto-publishing cannot run is flagged with the exact blocking condition, such as Publish mode not being Automatic, an unassigned, paused, not-automatic, unverified, or deleted Publisher identity, or a retry that is not yet due.
 

@@ -45,6 +45,8 @@ export class PublishRepository {
       await transaction.publishJob.update({ where: { id: jobId }, data: { publisherIdentityId: firstPublisherId, status: "APPROVED", scheduledFor, caption, nextAttemptAt: null, lastError: null, startedAt: null, heartbeatAt: null, claimToken: null, phase: null } });
       const targetIds = [jobId];
       for (const publisherIdentityId of additionalPublisherIds) {
+        const existingTarget = await transaction.publishJob.findFirst({ where: { sourcePostId: reviewJob.sourcePostId, publisherIdentityId }, include: { publishedPost: true } });
+        if (existingTarget?.publishedPost) continue;
         const target = await transaction.publishJob.upsert({
           where: { sourcePostId_publisherIdentityId: { sourcePostId: reviewJob.sourcePostId, publisherIdentityId } },
           create: { sourcePostId: reviewJob.sourcePostId, mediaAssetId: reviewJob.mediaAssetId, publisherIdentityId, caption, status: "APPROVED", scheduledFor },
@@ -169,6 +171,7 @@ export class PublishRepository {
     const jobs = await this.client.publishJob.findMany({
       where: {
         publisherIdentityId,
+        publishedPost: null,
         scheduledFor: { not: null, lte: now },
         OR: [
           { status: "APPROVED" },
@@ -199,6 +202,7 @@ export class PublishRepository {
       const candidate = await transaction.publishJob.findFirst({
         where: {
           publisherIdentityId,
+          publishedPost: null,
           AND: [
             { OR: [{ status: "APPROVED" }, { status: "RETRY_WAIT", nextAttemptAt: { lte: now } }] },
             { OR: [{ scheduledFor: null }, { scheduledFor: { lte: now } }] },
@@ -230,7 +234,12 @@ export class PublishRepository {
       });
       if (!existing) throw new Error("Publish job no longer exists.");
       if (publisherIdentityId && existing.publisherIdentityId !== publisherIdentityId) throw new Error("This publish job belongs to a different Publisher identity.");
-      if (existing.publishedPost || existing.status === "COMPLETED") throw new Error("This post has already been published.");
+      if (existing.publishedPost || existing.status === "COMPLETED") {
+        if (existing.publishedPost && existing.status !== "COMPLETED") {
+          await transaction.publishJob.update({ where: { id: jobId }, data: { status: "COMPLETED", publishedAt: existing.publishedPost.publishedAt } });
+        }
+        throw new Error("This post has already been published.");
+      }
       if (existing.status === "RUNNING") {
         const lastHeartbeat = existing.heartbeatAt ?? existing.startedAt;
         if (!lastHeartbeat || lastHeartbeat >= staleBefore) throw new Error("This post is already being published.");

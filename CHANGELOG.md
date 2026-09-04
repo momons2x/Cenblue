@@ -41,6 +41,10 @@ The project intends to follow semantic versioning once release automation is est
 - Review queue sorting: sort by newest or oldest post date, alongside the existing newest-updated, size, duration, caption-length, and source sorts.
 - Background download runs: **Process pending now**, **Download now**, and bulk retry-downloads start a guarded background batch in the dashboard process instead of blocking the request, so you can keep browsing while downloads progress; a live progress bar now follows you on every page, and the Queue confirms the run with a status toast.
 
+### Fixed
+
+- Automatic publisher no longer retries already-published jobs in an infinite loop when a publish job has an existing published post record but an inconsistent status.
+
 ### Changed
 
 - Playwright and authenticated `yt-dlp` launches now follow the selected Chromium browser instead of assuming Microsoft Edge globally.
