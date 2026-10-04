@@ -1,4 +1,6 @@
-export { resolveCaption, validateCaption, type CaptionSource } from "./caption";
+export { CAPTION_PLACEHOLDERS, resolveCaption, validateCaption, type CaptionSource } from "./caption";
+export { extractCaptionNames, type CaptionNames } from "./extract";
+export { FRANCHISES, resolveFranchise, type Franchise } from "./franchise-map";
 export { LocalPublishMediaVerifier, type PublishMediaVerifier } from "./media-verifier";
 export { calculateUploadTimeoutMs, captionsMatch, classifyBrowserLaunchError, isPointerInterceptionError, keyboardFallbackAllowed, persistentContextOptions, publishButtonReady, selectVisiblePublishButton, XPlaywrightPublisher, type PlaywrightPublisherOptions, type PublishButtonState } from "./playwright-publisher";
 export { PublishService } from "./publish-service";

@@ -1,0 +1,28 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Cenblue: dev server",
+      "type": "process",
+      "command": "${env:ProgramFiles}\\Git\\bin\\bash.exe",
+      "args": [
+        "-lc",
+        "for i in $(seq 1 10); do if curl -sf http://127.0.0.1:3000/api/health >/dev/null 2>&1; then echo 'Cenblue server already running on http://127.0.0.1:3000'; exit 0; fi; sleep 0.5; done; echo 'Starting Cenblue dev server on http://127.0.0.1:3000'; exec pnpm dev"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    }
+  ]
+}

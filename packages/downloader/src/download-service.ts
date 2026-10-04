@@ -69,9 +69,10 @@ export class DownloadService {
       const asset: MediaAssetInput = { filePath: paths.finalVideo, thumbnailPath: hasThumbnail ? paths.finalThumbnail : null, mimeType: "video/mp4", fileSize, ...metadata, checksum, perceptualHash, localRemovedAt: null };
       if (heartbeatFailure) throw heartbeatFailure;
       if (!await this.repository.complete(job.id, claimToken, job.sourcePost.id, asset, new Date())) throw new Error("Download finished after its job claim was lost; reconcile the media manually");
+      await this.files.cleanupPostAttempts(job.sourcePost.platformPostId);
       this.logger.info({ operation: "downloader.complete", jobId: job.id, postId: job.sourcePost.platformPostId, attemptCount: job.attemptCount }, "Download completed");
     } catch (error) {
-      await this.files.cleanup(paths.temporaryVideo, paths.temporaryThumbnail);
+      await this.files.cleanupPostAttempts(job.sourcePost.platformPostId);
       const message = error instanceof Error ? error.message : String(error);
       const retryable = error instanceof PermanentDownloadError ? false : !(error instanceof ProcessExecutionError) || error.retryable;
       const nextAttemptAt = retryable && job.attemptCount < this.maxAttempts ? new Date(Date.now() + 60_000 * 2 ** (job.attemptCount - 1)) : null;

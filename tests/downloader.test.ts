@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import pino from "pino";
 import { prisma, DownloadRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
-import { DownloadService, FfmpegVideoCompressor, FfprobeService, MediaFiles, type ProcessRunner, type VideoDownloader, type VideoInspector, YtDlpService } from "@cenblu/downloader";
+import { DownloadService, FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, type ProcessRunner, type VideoDownloader, type VideoInspector, YtDlpService } from "@cenblu/downloader";
 
 const root = "storage/temp/downloader-test";
 const files = new MediaFiles(join(root, "videos"), join(root, "temp"), join(root, "thumbnails"));
@@ -39,11 +39,21 @@ afterAll(async () => prisma.$disconnect());
 describe("downloader services", () => {
   it("builds a compatible yt-dlp command", async () => {
     let arguments_: string[] = [];
-    const runner: ProcessRunner = { run: async (_command, args) => { arguments_ = args; return { stdout: "", stderr: "" }; } };
+    let timeout = 0;
+    const runner: ProcessRunner = { run: async (_command, args, nextTimeout) => { arguments_ = args; timeout = nextTimeout; return { stdout: "", stderr: "" }; } };
     await new YtDlpService(runner, "yt-dlp", "ffmpeg").download("https://x.com/a/status/1", "video.mp4", "thumb.jpg");
-    expect(arguments_).toContain("bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b");
+    expect(arguments_).toContain("bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b[ext=mp4]/b");
+    expect(arguments_).toContain("--socket-timeout");
     expect(arguments_).toContain("--ffmpeg-location");
     expect(arguments_).toContain("--write-thumbnail");
+    expect(timeout).toBe(30 * 60_000);
+  });
+
+  it("reports a killed child process as a retryable timeout", async () => {
+    const runner = new NodeProcessRunner();
+    const attempt = runner.run(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], 300);
+    await expect(attempt).rejects.toThrow("timed out after 300ms");
+    await expect(attempt).rejects.toMatchObject({ retryable: true });
   });
 
   it("uses the configured authenticated Edge profile without exposing its cookies", async () => {
@@ -87,6 +97,23 @@ describe("downloader services", () => {
     await files.moveToFinal(paths.temporaryVideo, paths.finalVideo);
     expect(await files.fileSize(paths.finalVideo)).toBe(5);
     expect(paths.finalVideo).toMatch(/201\.mp4$/);
+  });
+
+  it("removes leftovers from every attempt of a post", async () => {
+    await mkdir(join(root, "temp"), { recursive: true });
+    const first = files.paths("202", 1);
+    const second = files.paths("202", 2);
+    const other = files.paths("203", 1);
+    await writeFile(first.temporaryVideo, "stale attempt one");
+    await writeFile(second.temporaryVideo, "attempt two");
+    await writeFile(second.temporaryThumbnail, "attempt two thumbnail");
+    await writeFile(other.temporaryVideo, "unrelated post");
+    await files.cleanupPostAttempts("202");
+    expect(await files.exists(first.temporaryVideo)).toBe(false);
+    expect(await files.exists(second.temporaryVideo)).toBe(false);
+    expect(await files.exists(second.temporaryThumbnail)).toBe(false);
+    expect(await files.exists(other.temporaryVideo)).toBe(true);
+    await files.cleanup(other.temporaryVideo);
   });
 
   it("persists retry state and cleans failed temporary files", async () => {

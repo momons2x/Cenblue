@@ -21,3 +21,6 @@ test-results/
 .DS_Store
 Thumbs.db
 cenblu-preferences*.json
+docs/BATCH_SCHEDULE_REFERENCE.md
+scripts/
+.commandcode/

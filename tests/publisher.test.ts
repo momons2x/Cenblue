@@ -4,11 +4,31 @@ import pino from "pino";
 import type { Locator } from "playwright";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, PublishRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
-import { calculateUploadTimeoutMs, captionsMatch, classifyBrowserLaunchError, cloneEdgeProfile, isPointerInterceptionError, keyboardFallbackAllowed, LocalPublishMediaVerifier, persistentContextOptions, publishButtonReady, PublisherError, PublishService, resolveCaption, selectVisiblePublishButton, validateCaption, type Publisher } from "@cenblu/publisher";
+import { calculateUploadTimeoutMs, captionsMatch, classifyBrowserLaunchError, cloneEdgeProfile, extractCaptionNames, isPointerInterceptionError, keyboardFallbackAllowed, LocalPublishMediaVerifier, persistentContextOptions, publishButtonReady, PublisherError, PublishService, resolveCaption, resolveFranchise, selectVisiblePublishButton, validateCaption, type CaptionSource, type Publisher } from "@cenblu/publisher";
 import { automaticPublishingEnabled } from "../apps/dashboard/app/lib/automatic-publisher";
 
 const logger = pino({ level: "silent" });
 const videos = resolve("storage/temp/publisher-test/videos");
+
+const STRUCTURED_TEMPLATE = [
+  "{character}",
+  "by {artist}",
+  "{follow}",
+  "{reaction}",
+  "",
+  "from {franchise}",
+  "",
+  "{tags}",
+].join("\n");
+
+function captionSource(platformPostId: string, text: string, username = "kitagawapost"): CaptionSource {
+  return {
+    platformPostId,
+    text,
+    sourceUrl: `https://x.com/${username}/status/${platformPostId}`,
+    sourceAccount: { username, captionTemplate: null, attributionTemplate: null, hashtagRules: null },
+  };
+}
 
 async function publishablePost(platformPostId: string, fileExists = true): Promise<{ path: string }> {
   const account = await new SourceAccountRepository(prisma).create({ username: `publisher_${platformPostId}` });
@@ -349,5 +369,155 @@ describe("publisher", () => {
 
     await service.processNext();
     expect(await prisma.publishJob.findFirstOrThrow()).toMatchObject({ status: "FAILED", attemptCount: 2, lastError: "PROCESSING_TIMEOUT: slow upload" });
+  });
+});
+
+describe("caption name extraction", () => {
+  it("reads the kitagawapost character and artist pair", () => {
+    expect(extractCaptionNames("Mercy\n\nBy - TheFastestGMan", "kitagawapost")).toEqual({ character: "Mercy", artist: "TheFastestGMan" });
+    expect(resolveFranchise("Mercy")?.slug).toBe("overwatch");
+    expect(extractCaptionNames("Stamina training!\n\nBy - Anna Anon", "kitagawapost")).toEqual({ character: null, artist: "Anna Anon" });
+    expect(extractCaptionNames("Lara got caught again\n\nBy - Madruga3D", "kitagawapost")).toEqual({ character: null, artist: "Madruga3D" });
+    expect(extractCaptionNames("Black Swan - Caressing Moonlight \n\nBy - AidenHet", "kitagawapost")).toEqual({ character: "Black Swan", artist: "AidenHet" });
+  });
+
+  it("reads the nitlali animation credit and the voice-actor character", () => {
+    expect(extractCaptionNames("Animation by-@exprational1\nYixuan VA-@LecheryAmoreVA\nSFX-@HentAudio", "nitlali_nsfw")).toEqual({ character: "Yixuan", artist: "exprational1" });
+    expect(resolveFranchise("Yixuan")?.slug).toBe("zzz");
+    expect(extractCaptionNames("Animation by-@Makoda_mako\n Marciana", "nitlali_nsfw")).toEqual({ character: "Marciana", artist: "Makoda_mako" });
+    expect(extractCaptionNames("Animation by-@dezmall\nHarley VA-@KittenVox\nMale VA-@IRecshun", "nitlali_nsfw")).toEqual({ character: "Harley", artist: "dezmall" });
+  });
+
+  it("skips episode dumps that start with Title-", () => {
+    expect(extractCaptionNames("Title- Kanojo Saimin\n《Episode 1》 &(New)", "nitlali_nsfw")).toEqual({ character: null, artist: null });
+  });
+
+  it("reads the master_uwurr title and line-2 artist without leaking promo copy", () => {
+    expect(extractCaptionNames("Robin & Stelle \nTy98 \n\nOurdream AI \nhttps://ourdream.ai/t/master_uwurr", "master_uwurr")).toEqual({ character: "Robin & Stelle", artist: "Ty98" });
+    expect(resolveFranchise("Robin & Stelle")?.slug).toBe("hsr");
+    expect(extractCaptionNames("Kamihikoki Evelyn  \n\n@LusychatAI \nhttps://lusychat.ai/es", "master_uwurr")).toEqual({ character: "Kamihikoki Evelyn", artist: null });
+    expect(extractCaptionNames("Una chica en el metro\nFxx \n\nAI Lovescape \nhttps://lovescape.com/x", "master_uwurr")).toEqual({ character: null, artist: "Fxx" });
+    expect(extractCaptionNames("Yvonne Arknights \nRinhee \n\nCrea un personaje\nhttps://lovescape.com/x", "master_uwurr")).toEqual({ character: "Yvonne Arknights", artist: "Rinhee" });
+    expect(resolveFranchise("Yvonne Arknights")?.slug).toBe("endfield");
+  });
+});
+
+describe("franchise map", () => {
+  it("keeps crossovers on their original franchise", () => {
+    expect(resolveFranchise("2B")?.slug).toBe("nier");
+    expect(resolveFranchise("A2")?.slug).toBe("nier");
+    expect(resolveFranchise("Misato")?.slug).toBe("evangelion");
+    expect(resolveFranchise("Jill Valentine")?.slug).toBe("residentevil");
+    expect(resolveFranchise("Claire Redfield")?.slug).toBe("residentevil");
+  });
+
+  it("resolves pair titles and franchise suffixes without guessing", () => {
+    expect(resolveFranchise("Mona x Aether")?.slug).toBe("genshin");
+    expect(resolveFranchise("Caesar ZZZ")?.slug).toBe("zzz");
+    expect(resolveFranchise("Tifa & Yuffie")?.slug).toBe("ff7");
+    expect(resolveFranchise("Grace x Koleda")?.slug).toBe("zzz");
+  });
+
+  it("omits the franchise when the character is not in the table", () => {
+    expect(resolveFranchise("Grace Ashcroft")).toBeNull();
+    expect(resolveFranchise("Tamaki")).toBeNull();
+    expect(resolveFranchise("Linkle at the Tavern")).toBeNull();
+    expect(resolveFranchise(null)).toBeNull();
+  });
+
+  it("prefers the link-priority franchise order", () => {
+    const priority = (slug: string) => ["zzz", "genshin", "hsr", "wutheringwaves"].indexOf(slug);
+    expect(priority(resolveFranchise("Nicole")!.slug)).toBeLessThan(priority(resolveFranchise("Mona")!.slug));
+    expect(priority(resolveFranchise("Mona")!.slug)).toBeLessThan(priority(resolveFranchise("Kafka")!.slug));
+    expect(priority(resolveFranchise("Kafka")!.slug)).toBeLessThan(priority(resolveFranchise("Carlotta")!.slug));
+  });
+});
+
+describe("resolveCaption", () => {
+  it("fills character, artist and franchise from the source text", () => {
+    const caption = resolveCaption(captionSource("2102735944675889650", "Nicole\n\nBy - TwiistedLewds"), STRUCTURED_TEMPLATE);
+    const lines = caption.split("\n");
+    expect(lines[0]).toBe("Nicole");
+    expect(caption).toContain("by TwiistedLewds");
+    expect(caption).toContain("Follow em!!");
+    expect(caption).toContain("from Zenless Zone Zero");
+    expect(caption).not.toContain("https://");
+    expect(caption).not.toContain("@TwiistedLewds");
+  });
+
+  it("drops connector lines whose placeholders never resolved", () => {
+    const template = "{character}\nby {artist}\n{follow}\n\nfrom {franchise}";
+    expect(resolveCaption(captionSource("3", "Brighid\n\nBy - BlobCG"), template)).toBe("Brighid\nby BlobCG\nFollow em!!");
+    expect(resolveCaption(captionSource("4", "By - Exga"), template)).toBe("by Exga\nFollow em!!");
+    expect(resolveCaption(captionSource("5", "Tamaki\n\nBy - Spizzy3D"), template)).toBe("Tamaki\nby Spizzy3D\nFollow em!!");
+  });
+
+  it("falls back to the source text when every placeholder is empty", () => {
+    const caption = resolveCaption(captionSource("6", "El fanservice no puede ser tan exagerado.\n\nEl fanservice:", "master_uwurr"), STRUCTURED_TEMPLATE);
+    expect(caption).toBe("El fanservice no puede ser tan exagerado. El fanservice:");
+  });
+
+  it("keeps a balanced parenthesised artist credit intact", () => {
+    const caption = resolveCaption(captionSource("74", "Burnice bouncing\n\nBy - Kimidori (Pixiv)"), STRUCTURED_TEMPLATE);
+    expect(caption).toContain("by Kimidori (Pixiv)");
+  });
+
+  it("strips title markers from the fallback caption", () => {
+    const caption = resolveCaption(
+      captionSource("72", "Title- Juurin Oukoku\n《Episode 1》 &(New)"),
+      STRUCTURED_TEMPLATE,
+    );
+    expect(caption).toBe("Juurin Oukoku");
+  });
+
+  it("returns an empty caption when the source text is empty", () => {
+    expect(resolveCaption(captionSource("73", ""), STRUCTURED_TEMPLATE)).toBe("");
+  });
+
+  it("never leaks the source promo URL into a generated caption", () => {
+    const caption = resolveCaption(captionSource("7", "Robin & Stelle \nTy98 \n\nOurdream AI \nhttps://ourdream.ai/t/master_uwurr", "master_uwurr"), STRUCTURED_TEMPLATE);
+    expect(caption).not.toContain("https://");
+    expect(caption).toContain("Robin & Stelle");
+    expect(caption).toContain("by Ty98");
+    expect(caption).toContain("from Honkai Star Rail");
+  });
+
+  it("varies the tag pool and sometimes omits hashtags entirely", () => {
+    const sizes = new Set<number>();
+    let zeroTagCaptions = 0;
+    for (let index = 0; index < 60; index += 1) {
+      const caption = resolveCaption(captionSource(String(700_000 + index), "Mercy\n\nBy - TheFastestGMan"), STRUCTURED_TEMPLATE);
+      const tagLine = caption.split("\n").find((line) => line.startsWith("#"));
+      const size = tagLine ? tagLine.split(/\s+/).filter((tag) => tag.startsWith("#")).length : 0;
+      sizes.add(size);
+      if (size === 0) zeroTagCaptions += 1;
+    }
+    expect(sizes.size).toBeGreaterThanOrEqual(3);
+    expect(zeroTagCaptions).toBeGreaterThanOrEqual(1);
+    expect(zeroTagCaptions).toBeLessThanOrEqual(15);
+  });
+
+  it("adds a reaction line to roughly one post in ten and never without a character", () => {
+    const reactions = /she knows you're watching|keep going, it gets worse|my favourite|scroll past this|supposed to see|watch it twice|done, promise|thinking about the next/i;
+    let hits = 0;
+    for (let index = 0; index < 60; index += 1) {
+      const caption = resolveCaption(captionSource(String(710_000 + index), "Mercy\n\nBy - TheFastestGMan"), STRUCTURED_TEMPLATE);
+      if (reactions.test(caption)) hits += 1;
+    }
+    expect(hits).toBeGreaterThanOrEqual(2);
+    expect(hits).toBeLessThanOrEqual(12);
+    const artistOnly = resolveCaption(captionSource("719999", "By - Exga"), STRUCTURED_TEMPLATE);
+    expect(artistOnly.startsWith("by Exga")).toBe(true);
+    expect(reactions.test(artistOnly)).toBe(false);
+  });
+
+  it("keeps every generated caption inside 280 characters", () => {
+    const long = "word ".repeat(120).trim();
+    expect(Array.from(resolveCaption(captionSource("8", long), "{sourceCaption}")).length).toBeLessThanOrEqual(280);
+    for (let index = 0; index < 40; index += 1) {
+      const caption = resolveCaption(captionSource(String(730_000 + index), "Yoru & Mei \nArtist_Name \n\nLovescape AI \nhttps://lovescape.com/x", "master_uwurr"), STRUCTURED_TEMPLATE);
+      expect(Array.from(caption).length).toBeLessThanOrEqual(280);
+      expect(caption.length).toBeGreaterThan(0);
+    }
   });
 });

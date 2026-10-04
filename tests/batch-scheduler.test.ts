@@ -26,6 +26,12 @@ function nightOf(date: Date, zone: string): string {
   return dayOf(new Date(date.getTime() - 24 * 3_600_000), zone);
 }
 
+function minutesOf(date: Date, zone: string): number {
+  const value = new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
+  const [hour, minute] = value.split(":").map(Number);
+  return hour * 60 + minute;
+}
+
 describe("buildBatchSchedule", () => {
   it("schedules every job within the active window", () => {
     const result = buildBatchSchedule({ ...base, jobs: jobs(5) });
@@ -203,5 +209,97 @@ describe("buildBatchSchedule", () => {
     expect(result).toHaveLength(25);
     const days = new Set(result.map((entry) => dayOf(entry.scheduledFor, timeZone)));
     expect(days.size).toBeGreaterThanOrEqual(2);
+  });
+
+  it("rolls day overflow into the next day instead of dropping jobs", () => {
+    // A constant high random source piles every job into the last declared day.
+    const random = () => 0.99;
+    const result = buildBatchSchedule({
+      ...base,
+      jobs: jobs(10),
+      numberOfDays: 3,
+      postsPerDay: 2,
+      random,
+      minGapMinutes: 15,
+    });
+    expect(result).toHaveLength(10);
+    expect(new Set(result.map((entry) => entry.jobId)).size).toBe(10);
+    expect(new Set(result.map((entry) => entry.jobId))).toEqual(new Set(jobs(10).map((job) => job.id)));
+    const days = new Set(result.map((entry) => dayOf(entry.scheduledFor, timeZone)));
+    expect(days.size).toBeGreaterThanOrEqual(5);
+    const counts: Record<string, number> = {};
+    for (const entry of result) {
+      const day = dayOf(entry.scheduledFor, timeZone);
+      counts[day] = (counts[day] ?? 0) + 1;
+      const hour = Number(hourOf(entry.scheduledFor, timeZone));
+      expect(hour).toBeGreaterThanOrEqual(9);
+      expect(hour).toBeLessThanOrEqual(22);
+    }
+    expect(Math.max(...Object.values(counts))).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps every post inside the production day and evening windows", () => {
+    const activeWindows = [{ start: "09:00", end: "15:00" }, { start: "19:00", end: "23:00" }];
+    const result = buildBatchSchedule({
+      ...base,
+      activeWindows,
+      jobs: jobs(8),
+      numberOfDays: 4,
+      jitterMinutes: 3,
+      minGapMinutes: 20,
+    });
+    expect(result).toHaveLength(8);
+    for (const entry of result) {
+      const minutes = minutesOf(entry.scheduledFor, timeZone);
+      const inDayWindow = minutes >= 9 * 60 && minutes <= 15 * 60;
+      const inEveningWindow = minutes >= 19 * 60 && minutes <= 23 * 60;
+      expect(inDayWindow || inEveningWindow).toBe(true);
+    }
+  });
+
+  it("distributes 100 posts randomly across 8 days", () => {
+    const result = buildBatchSchedule({
+      ...base,
+      jobs: jobs(100),
+      numberOfDays: 8,
+      jitterMinutes: 3,
+      minGapMinutes: 20,
+    });
+    expect(result).toHaveLength(100);
+
+    const dayCounts: Record<string, number> = {};
+    for (const entry of result) {
+      const day = dayOf(entry.scheduledFor, timeZone);
+      dayCounts[day] = (dayCounts[day] ?? 0) + 1;
+    }
+    const days = Object.keys(dayCounts).sort();
+    expect(days).toHaveLength(8);
+
+    const counts = Object.values(dayCounts);
+    const minCount = Math.min(...counts);
+    const maxCount = Math.max(...counts);
+    expect(minCount).toBeGreaterThanOrEqual(5);
+    expect(maxCount).toBeLessThanOrEqual(25);
+    expect(maxCount - minCount).toBeGreaterThanOrEqual(2);
+
+    for (const entry of result) {
+      const hour = Number(hourOf(entry.scheduledFor, timeZone));
+      expect(hour).toBeGreaterThanOrEqual(9);
+      expect(hour).toBeLessThanOrEqual(22);
+    }
+
+    const byDay = new Map<string, number[]>();
+    for (const entry of result) {
+      const day = dayOf(entry.scheduledFor, timeZone);
+      const times = byDay.get(day) ?? [];
+      times.push(entry.scheduledFor.getTime());
+      byDay.set(day, times);
+    }
+    for (const times of byDay.values()) {
+      const sorted = times.sort((a, b) => a - b);
+      for (let index = 1; index < sorted.length; index += 1) {
+        expect(sorted[index] - sorted[index - 1]).toBeGreaterThanOrEqual(20 * 60_000);
+      }
+    }
   });
 });

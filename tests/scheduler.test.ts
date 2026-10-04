@@ -52,6 +52,25 @@ describe("scheduler", () => {
     await expect(exclusive.run(async () => "available")).resolves.toBe("available");
   });
 
+  it("waits for a busy collector profile lease instead of failing immediately", async () => {
+    const repository = new SchedulerRepository(prisma);
+    const held = await repository.acquire("x-collector-wait", new Date(), 60_000);
+    expect(held).not.toBeNull();
+    const exclusive = new DatabaseExclusiveLease(repository, "x-collector-wait", 60_000, 5_000);
+    const pending = exclusive.run(async () => "acquired");
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1_200));
+    await repository.release(held!);
+    await expect(pending).resolves.toBe("acquired");
+  });
+
+  it("still fails when the collector profile lease is never released", async () => {
+    const repository = new SchedulerRepository(prisma);
+    const held = await repository.acquire("x-collector-stall", new Date(), 60_000);
+    const exclusive = new DatabaseExclusiveLease(repository, "x-collector-stall", 60_000, 1_000);
+    await expect(exclusive.run(async () => "unreachable")).rejects.toThrow("already in use");
+    await repository.release(held!);
+  });
+
   it("allows collector and publisher profiles to operate independently", async () => {
     const repository = new SchedulerRepository(prisma);
     const collector = await repository.acquire("x-collector-profile", new Date(), 60_000);

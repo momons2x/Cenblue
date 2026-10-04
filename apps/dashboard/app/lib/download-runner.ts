@@ -16,7 +16,8 @@ async function buildDownloader() {
     new DownloadRepository(prisma),
     new YtDlpService(runner, config.ytDlpBinary, config.ffmpegBinary, config.playwrightProfileDirectory ? resolve(config.playwrightProfilePath, config.playwrightProfileDirectory) : config.playwrightProfilePath, config.collectorBrowserId, async (collectorIdentityId) => {
       const identity = await prisma.browserIdentity.findUniqueOrThrow({ where: { id: collectorIdentityId } });
-      const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+      const leaseMs = Math.max(config.workerLockTimeoutMinutes, 10) * 60_000;
+      const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), leaseMs, leaseMs);
       return { profilePath: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.collectorBrowserId, runExclusive: (operation: () => Promise<void>) => lease.run(operation) };
     }),
     new FfprobeService(runner, config.ffprobeBinary),

@@ -2,7 +2,7 @@ import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
-import { MediaRemovalService, PortableConfigService, SourcePurgeService } from "@cenblu/operations";
+import { MediaRemovalService, PortableConfigService, SourcePurgeService, StorageMaintenance } from "@cenblu/operations";
 
 const root = resolve("storage/temp/source-purge-test");
 const videos = resolve(root, "videos");
@@ -151,7 +151,92 @@ describe("published media removal", () => {
     await writeFile(videoPath, "video");
     await prisma.mediaAsset.create({ data: { sourcePostId: post.id, filePath: videoPath, mimeType: "video/mp4", fileSize: 5, durationSeconds: 1, width: 1, height: 1, checksum: "checksum" } });
 
-    await expect(new MediaRemovalService(prisma).removePublished(post.id, { videos, thumbnails })).rejects.toThrow("Only a confirmed published post");
+    await expect(new MediaRemovalService(prisma).removePublished(post.id, { videos, thumbnails })).rejects.toThrow("Only a published post can have its local media removed");
     expect((await stat(videoPath)).isFile()).toBe(true);
+  });
+
+  it("removes media for a published post that has no publish job record", async () => {
+    const source = await new SourceAccountRepository(prisma).create({ username: "legacy_published" });
+    await new SourcePostRepository(prisma).persistNew(source.id, [{ platformPostId: "82005", sourceUrl: "https://x.com/legacy_published/status/82005", text: "legacy", postedAt: new Date(), mediaType: "VIDEO" }], new Date());
+    const post = await prisma.sourcePost.findUniqueOrThrow({ where: { platformPostId: "82005" } });
+    const videoPath = resolve(videos, "82005.mp4");
+    await mkdir(videos, { recursive: true });
+    await writeFile(videoPath, "video");
+    const asset = await prisma.mediaAsset.create({ data: { sourcePostId: post.id, filePath: videoPath, mimeType: "video/mp4", fileSize: 5, durationSeconds: 1, width: 1, height: 1, checksum: "legacy-checksum" } });
+    await prisma.sourcePost.update({ where: { id: post.id }, data: { status: "PUBLISHED" } });
+
+    await new MediaRemovalService(prisma).remove(post.id, { videos, thumbnails });
+
+    await expect(stat(videoPath)).rejects.toThrow();
+    expect((await prisma.mediaAsset.findUniqueOrThrow({ where: { id: asset.id } })).localRemovedAt).not.toBeNull();
+    expect((await prisma.sourcePost.findUniqueOrThrow({ where: { id: post.id } })).status).toBe("PUBLISHED");
+    expect(await prisma.mediaAsset.count({ where: { id: asset.id } })).toBe(1);
+  });
+});
+
+describe("published media bulk purge", () => {
+  async function publishedFixture(platformPostId: string, options: { publishStatus?: string; pendingJob?: boolean } = {}): Promise<{ path: string }> {
+    const source = await new SourceAccountRepository(prisma).create({ username: `purge_${platformPostId}` });
+    await new SourcePostRepository(prisma).persistNew(source.id, [{ platformPostId, sourceUrl: `https://x.com/purge_${platformPostId}/status/${platformPostId}`, text: "purge", postedAt: new Date(), mediaType: "VIDEO" }], new Date());
+    const post = await prisma.sourcePost.findUniqueOrThrow({ where: { platformPostId } });
+    const path = resolve(videos, `${platformPostId}.mp4`);
+    await mkdir(videos, { recursive: true });
+    await writeFile(path, "video");
+    const asset = await prisma.mediaAsset.create({ data: { sourcePostId: post.id, filePath: path, mimeType: "video/mp4", fileSize: 5, durationSeconds: 1, width: 1, height: 1, checksum: `purge-${platformPostId}` } });
+    if (options.pendingJob) {
+      await prisma.publishJob.create({ data: { sourcePostId: post.id, mediaAssetId: asset.id, caption: "pending", status: "READY_FOR_REVIEW" } });
+    }
+    await prisma.sourcePost.update({ where: { id: post.id }, data: { status: options.publishStatus ?? "PUBLISHED" } });
+    return { path };
+  }
+
+  it("reports without touching anything in dry-run mode", async () => {
+    const first = await publishedFixture("83001");
+    await publishedFixture("83002", { pendingJob: true });
+    const summary = await new MediaRemovalService(prisma).purgePublished({ videos, thumbnails }, { dryRun: true });
+
+    expect(summary).toMatchObject({ dryRun: true, removed: 1, skipped: 1, failed: 0, bytes: 5 });
+    expect((await stat(first.path)).isFile()).toBe(true);
+    expect((await prisma.mediaAsset.findFirstOrThrow({ where: { sourcePost: { platformPostId: "83001" } } })).localRemovedAt).toBeNull();
+  });
+
+  it("removes eligible published media and leaves pending or unpublished posts alone", async () => {
+    const eligible = await publishedFixture("83011");
+    const pending = await publishedFixture("83012", { pendingJob: true });
+    const unpublished = await publishedFixture("83013", { publishStatus: "READY_FOR_REVIEW" });
+
+    const summary = await new MediaRemovalService(prisma).purgePublished({ videos, thumbnails });
+
+    expect(summary).toMatchObject({ dryRun: false, removed: 1, skipped: 1, failed: 0, bytes: 5, failures: [] });
+    await expect(stat(eligible.path)).rejects.toThrow();
+    expect((await stat(pending.path)).isFile()).toBe(true);
+    expect((await stat(unpublished.path)).isFile()).toBe(true);
+    expect((await prisma.sourcePost.findUniqueOrThrow({ where: { platformPostId: "83011" } })).status).toBe("PUBLISHED");
+    expect((await prisma.mediaAsset.findFirstOrThrow({ where: { sourcePost: { platformPostId: "83011" } } })).localRemovedAt).not.toBeNull();
+    expect((await prisma.mediaAsset.findFirstOrThrow({ where: { sourcePost: { platformPostId: "83013" } } })).localRemovedAt).toBeNull();
+
+    const secondRun = await new MediaRemovalService(prisma).purgePublished({ videos, thumbnails });
+    expect(secondRun).toMatchObject({ removed: 0, skipped: 1 });
+  });
+});
+
+describe("storage audit", () => {
+  async function assetFor(platformPostId: string, options: { localRemovedAt?: Date } = {}): Promise<void> {
+    const source = await new SourceAccountRepository(prisma).create({ username: `audit_${platformPostId}` });
+    await new SourcePostRepository(prisma).persistNew(source.id, [{ platformPostId, sourceUrl: `https://x.com/audit_${platformPostId}/status/${platformPostId}`, text: "audit", postedAt: new Date(), mediaType: "VIDEO" }], new Date());
+    const post = await prisma.sourcePost.findUniqueOrThrow({ where: { platformPostId } });
+    await prisma.mediaAsset.create({ data: { sourcePostId: post.id, filePath: resolve(videos, `${platformPostId}.mp4`), mimeType: "video/mp4", fileSize: 5, durationSeconds: 1, width: 1, height: 1, checksum: `audit-${platformPostId}`, localRemovedAt: options.localRemovedAt ?? null } });
+  }
+
+  it("ignores assets whose local media was deliberately removed", async () => {
+    await assetFor("84001", { localRemovedAt: new Date() });
+    expect(await new StorageMaintenance(prisma).audit(videos, thumbnails)).toEqual([]);
+  });
+
+  it("reports an expected asset whose file is gone", async () => {
+    await assetFor("84002");
+    const issues = await new StorageMaintenance(prisma).audit(videos, thumbnails);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].problem).toBe("video file is missing");
   });
 });

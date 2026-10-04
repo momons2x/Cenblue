@@ -7,6 +7,7 @@ export type BatchScheduleInput = {
   jitterMinutes: number;
   minGapMinutes: number;
   postsPerDay?: number;
+  numberOfDays?: number;
   targetDay: string;
   random?: () => number;
 };
@@ -102,6 +103,52 @@ export function buildBatchSchedule(input: BatchScheduleInput): ScheduledJob[] {
   const day = Temporal.PlainDate.from(input.targetDay);
   const minGapMs = Math.max(0, input.minGapMinutes) * 60_000;
   const jitterMs = Math.max(0, input.jitterMinutes) * 60_000;
+  const numberOfDays = input.numberOfDays ?? 1;
+
+  const shuffled = shuffle(jobs, random);
+
+  if (numberOfDays > 1) {
+    const buckets: Array<Array<{ id: string }>> = Array.from({ length: numberOfDays }, () => []);
+    for (const job of shuffled) buckets[Math.floor(random() * numberOfDays)].push(job);
+
+    const result: ScheduledJob[] = [];
+    let dayOffset = 0;
+    // Overflow beyond a day's cap must roll into the next day. Dropping it would leave the
+    // caller believing every selected job was scheduled when some were silently discarded.
+    while (dayOffset < buckets.length) {
+      const dayJobs = buckets[dayOffset];
+      if (dayJobs.length > 0) {
+        const targetDay = day.add({ days: dayOffset });
+        const dayWindows = parsedWindows.map((w) => dayWindow(targetDay, input.timeZone, w.start, w.end));
+        const dayMinutes = dayWindows.map((dw) => (dw.endMs - dw.startMs) / 60_000);
+        const totalDayMinutes = dayMinutes.reduce((a, b) => a + b, 0);
+        const totalDayMs = totalDayMinutes * 60_000;
+        const dayCap = Math.max(1, Math.min(
+          input.postsPerDay ?? Infinity,
+          totalDayMs <= 0 || minGapMs === 0 ? Infinity : Math.floor(totalDayMs / minGapMs),
+        ));
+        const slots = Math.min(dayCap, dayJobs.length);
+        const perWindow = distributeProportionally(slots, dayMinutes, totalDayMinutes);
+        let jobIndex = 0;
+        for (let wIdx = 0; wIdx < dayWindows.length; wIdx++) {
+          const winSlots = perWindow[wIdx];
+          const win = dayWindows[wIdx];
+          const times = assignSlots(winSlots, win.startMs, win.endMs, minGapMs, jitterMs, random);
+          for (let sIdx = 0; sIdx < times.length; sIdx++) {
+            result.push({ jobId: dayJobs[jobIndex].id, scheduledFor: new Date(times[sIdx]) });
+            jobIndex++;
+          }
+        }
+        const overflow = dayJobs.slice(slots);
+        if (overflow.length > 0) {
+          if (dayOffset + 1 >= buckets.length) buckets.push([]);
+          buckets[dayOffset + 1].push(...overflow);
+        }
+      }
+      dayOffset += 1;
+    }
+    return result.sort((a, b) => a.scheduledFor.getTime() - b.scheduledFor.getTime());
+  }
 
   const dayWindowsAll = parsedWindows.map((w) => dayWindow(day, input.timeZone, w.start, w.end));
   const windowMinutes = dayWindowsAll.map((dw) => (dw.endMs - dw.startMs) / 60_000);
@@ -112,7 +159,6 @@ export function buildBatchSchedule(input: BatchScheduleInput): ScheduledJob[] {
     totalWindowMs <= 0 || minGapMs === 0 ? Infinity : Math.floor(totalWindowMs / minGapMs),
   ));
 
-  const shuffled = shuffle(jobs, random);
   const result: ScheduledJob[] = [];
   let remaining = shuffled;
   let dayOffset = 0;

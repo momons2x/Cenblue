@@ -354,6 +354,8 @@ export async function scheduleBatchReview(formData: FormData) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDay)) throw new Error("Choose a valid schedule day.");
   const rawCount = String(formData.get("postsPerDay") ?? "").trim();
   const countOverride = rawCount === "" ? undefined : z.coerce.number().int().min(1).max(50).parse(rawCount);
+  const rawNumberOfDays = String(formData.get("numberOfDays") ?? "").trim();
+  const numberOfDays = rawNumberOfDays === "" ? undefined : z.coerce.number().int().min(1).max(30).parse(rawNumberOfDays);
   const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
   const publishers = await prisma.browserIdentity.findMany({ where: { id: { in: publisherIdentityIds }, role: "PUBLISHER", enabled: true } });
   if (publishers.length !== new Set(publisherIdentityIds).size) throw new Error("One or more selected Publisher identities are unavailable.");
@@ -368,6 +370,7 @@ export async function scheduleBatchReview(formData: FormData) {
       jitterMinutes: config.scheduleJitterMinutes,
       minGapMinutes: config.scheduleMinGapMinutes,
       postsPerDay: countOverride,
+      numberOfDays,
       targetDay,
     });
     allScheduled.push(...schedule);
@@ -970,8 +973,6 @@ export async function saveSettings(formData: FormData) {
 export async function saveCaptionSettings(formData: FormData) {
   const templates = z.string().max(10_000).parse(formData.get("captionTemplates"));
   await new SettingsRepository(prisma).setMany({ CAPTION_TEMPLATES: templates });
-  const jobs = await prisma.publishJob.findMany({ where: { status: "READY_FOR_REVIEW" }, include: { sourcePost: { include: { sourceAccount: true } } } });
-  if (jobs.length > 0) await prisma.$transaction(jobs.map((job) => prisma.publishJob.update({ where: { id: job.id }, data: { caption: resolveCaption(job.sourcePost, templates) } })));
   refresh("/settings", "/review");
   redirect("/settings?captionSaved=1");
 }

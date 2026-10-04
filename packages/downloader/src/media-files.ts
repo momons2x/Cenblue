@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { basename, relative, resolve } from "node:path";
 import { PermanentDownloadError } from "./errors";
 
@@ -47,6 +47,22 @@ export class MediaFiles {
 
   async cleanup(...paths: string[]): Promise<void> {
     await Promise.all(paths.filter((path) => inside(this.temporaryDirectory, path)).map((path) => rm(path, { force: true })));
+  }
+
+  // Removes every attempt's leftovers for a post, not just the current one,
+  // so retried downloads cannot accumulate .part files across attempts.
+  async cleanupPostAttempts(platformPostId: string): Promise<void> {
+    const directory = resolve(this.temporaryDirectory);
+    let entries: string[];
+    try { entries = await readdir(directory); }
+    catch { return; }
+    const prefix = `${platformPostId}.`;
+    const targets = entries.filter((entry) => entry.startsWith(prefix) && entry.includes(".part."));
+    await Promise.all(targets.map((entry) => {
+      const path = resolve(directory, entry);
+      if (!inside(this.temporaryDirectory, path)) return Promise.resolve();
+      return rm(path, { force: true });
+    }));
   }
 
   async exists(path: string): Promise<boolean> {

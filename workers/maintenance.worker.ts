@@ -1,6 +1,6 @@
 import { applyStoredSettings, loadConfig } from "@cenblu/config";
 import { prisma, SettingsRepository } from "@cenblu/database";
-import { StorageMaintenance } from "@cenblu/operations";
+import { MediaRemovalService, StorageMaintenance } from "@cenblu/operations";
 import { createLogger } from "@cenblu/shared/logger";
 
 async function main(): Promise<void> {
@@ -18,7 +18,14 @@ async function main(): Promise<void> {
   } else if (command === "clean-temp") {
     const removed = await maintenance.cleanTemporary(config.tempStoragePath, new Date(Date.now() - 24 * 60 * 60_000));
     logger.info({ operation: "maintenance.temp.cleanup", removed }, "Temporary cleanup completed");
-  } else throw new Error("Use one of: audit, backup, clean-temp");
+  } else if (command === "purge-published") {
+    const dryRun = process.argv.includes("--dry-run");
+    const summary = await new MediaRemovalService(prisma).purgePublished({ videos: config.videoStoragePath, thumbnails: config.thumbnailStoragePath }, { dryRun });
+    const gigabytes = Number((summary.bytes / 1024 ** 3).toFixed(2));
+    const level = summary.failed > 0 ? "warn" : "info";
+    logger[level]({ operation: "maintenance.media.purge-published", ...summary, gigabytes }, `${dryRun ? "Would remove" : "Removed"} local media for ${summary.removed} published posts (${gigabytes} GB); skipped ${summary.skipped}, failed ${summary.failed}`);
+    if (summary.failed > 0) process.exitCode = 1;
+  } else throw new Error("Use one of: audit, backup, clean-temp, purge-published [--dry-run]");
 }
 
 main().catch((error: unknown) => {

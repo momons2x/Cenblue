@@ -26,14 +26,17 @@ export class YtDlpService implements VideoDownloader {
     const execute = async () => { await this.runner.run(this.binary, [
       "--no-playlist", "--no-part", "--no-progress", "--newline",
       ...cookies,
-      "--format", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",
+      "--format", "bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/b[ext=mp4]/b",
       "--merge-output-format", "mp4",
       "--ffmpeg-location", this.ffmpegBinary,
       "--write-thumbnail", "--convert-thumbnails", "jpg",
+      "--socket-timeout", "30",
+      "--retries", "3",
+      "--fragment-retries", "5",
       "--output", outputPath,
       "--output", `thumbnail:${thumbnailPath}`,
       sourceUrl,
-    ], 10 * 60_000); };
+    ], 30 * 60_000); };
     try { if (resolved?.runExclusive) await resolved.runExclusive(execute); else await execute(); }
     catch (error) {
       if (error instanceof ProcessExecutionError && /video unavailable|private video|not available|does not exist|unsupported url/i.test(error.stderr)) {

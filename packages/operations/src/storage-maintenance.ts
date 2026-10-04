@@ -25,6 +25,9 @@ export class StorageMaintenance {
     const assets = await this.client.mediaAsset.findMany();
     const issues: StorageIssue[] = [];
     for (const asset of assets) {
+      // Local media is intentionally deletable for published posts; those rows keep their
+      // metadata for accounting, so there is no file left to verify.
+      if (asset.localRemovedAt) continue;
       if (!inside(videosDirectory, asset.filePath)) {
         issues.push({ sourcePostId: asset.sourcePostId, path: asset.filePath, problem: "video path is outside configured storage" });
         continue;
