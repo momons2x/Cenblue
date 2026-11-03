@@ -3,7 +3,6 @@ import { NotificationOutboxRepository, OperationalEventRepository, SettingsRepos
 import { NotificationEmitter, type NotificationChannel, type PublishFailureContext, type PublishedPostContext } from "./emitter";
 
 export type PublishNotifierConfig = {
-  telegramBotToken: string | undefined;
   discordBotToken: string | undefined;
   discordOwnerId: string | undefined;
 };
@@ -20,7 +19,6 @@ export async function createPublishNotifier(
 ): Promise<PublishNotifier | null> {
   const stored = await new SettingsRepository(client).getAll();
   const channels: Partial<Record<NotificationChannel, string>> = {};
-  if (config.telegramBotToken && stored.TELEGRAM_CHAT_ID) channels.telegram = stored.TELEGRAM_CHAT_ID;
   if (config.discordBotToken && config.discordOwnerId && stored.NOTIFICATIONS_DISCORD_ENABLED === "true") channels.discord = config.discordOwnerId;
   const enabled = stored.NOTIFICATIONS_ENABLED === "true" && Object.keys(channels).length > 0;
   if (!enabled) return null;

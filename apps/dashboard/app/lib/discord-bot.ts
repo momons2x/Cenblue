@@ -12,12 +12,10 @@ export async function startDiscordBot(): Promise<void> {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   if (!config.discordBotToken || !config.discordOwnerId) return;
   const logger = pino({ name: "discord-bot" });
-  const stored = await new SettingsRepository(prisma).getAll();
   const bot = new DiscordBot({
     token: config.discordBotToken,
     ownerId: config.discordOwnerId,
     logger,
-    notification: { telegramBotToken: config.telegramBotToken ?? undefined, telegramChatId: stored.TELEGRAM_CHAT_ID ?? null },
     pipelineTimeZone: config.timezone,
   });
   globalState.__cenbluDiscordBot = { bot, started: true };

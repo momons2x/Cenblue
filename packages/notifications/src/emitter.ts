@@ -1,6 +1,6 @@
 import type { NotificationOutboxRepository, OperationalEventRepository } from "@cenblu/database";
 
-export type NotificationChannel = "telegram" | "discord";
+export type NotificationChannel = "discord";
 
 export type NotificationSettings = {
   enabled: boolean;

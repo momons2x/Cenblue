@@ -226,15 +226,15 @@ Core principles:
 
 ## Phase 9: Operational Events and Notifications
 
-**Goal:** Deliver useful Telegram and Discord alerts without making external messaging part of job correctness.
+**Goal:** Deliver useful Discord alerts without making external messaging part of job correctness.
 
 - [ ] Define stable error codes, sanitized operator messages, severity, fingerprints, and correlation IDs.
 - [x] Add durable `OperationalEvent`, `NotificationChannel`, and `NotificationOutbox` models.
 - [ ] Insert operational events transactionally with authoritative job state changes where possible.
 - [x] Add a claim-token-fenced notification dispatcher with stale-claim recovery.
-- [x] Implement Telegram Bot API delivery with chat validation and `retry_after` handling.
-- [ ] Implement Discord webhooks as the first Discord transport.
-- [ ] Consider a Discord bot only for commands, acknowledgements, or interactive incident management.
+- [x] Deliver owner-only Discord DM alerts through the bot, including retry and dead-letter handling.
+- [ ] Consider Discord webhooks as an additional transport.
+- [x] Use the Discord bot for commands and acknowledgements in the owner DM.
 - [ ] Add minimum severity, component/category filters, quiet hours, and critical-alert bypass.
 - [x] Deduplicate repeated incidents and aggregate retry storms within a configurable window.
 - [ ] Notify terminal failures, uncertain publications, session expiry, storage corruption, and worker outages by default.
@@ -251,7 +251,7 @@ Core principles:
 
 - Publishing and collection remain correct when every notification provider is unavailable.
 - Repeated failures do not create uncontrolled message storms.
-- Telegram and Discord test messages traverse the same durable outbox as real incidents.
+- Discord test messages traverse the same durable outbox as real incidents.
 - No notification credential appears in logs, portable exports, browser responses, or event payloads.
 
 ## Phase 10: Multi-Platform Publisher Foundation
@@ -443,7 +443,7 @@ Complete Phase 8.
 
 Complete Phase 9.
 
-**Expected result:** Deduplicated Telegram and Discord alerts for terminal failures, uncertain publications, and unhealthy workers.
+**Expected result:** Deduplicated Discord alerts for terminal failures, uncertain publications, and unhealthy workers.
 
 ### Milestone 6: Multi-Platform Foundation
 

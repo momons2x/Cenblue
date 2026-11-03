@@ -227,23 +227,19 @@ Published history uses responsive cards with expandable captions, media details,
 
 ## Notifications
 
-Cenblue can send Telegram alerts when a publish job succeeds or fails and needs attention. Setup:
+Cenblue can send Discord DM alerts when a publish job succeeds or fails and needs attention. Setup:
 
-1. Create a bot with [@BotFather](https://t.me/BotFather) and copy its token.
-2. Set `TELEGRAM_BOT_TOKEN` in the local `.env` and restart the dashboard. The token never enters the database or portable exports.
-3. Under **Settings → Notifications**, enable alerts and set your Telegram chat ID (the number in a chat link such as `t.me/<user>` or via `@userinfobot`).
+1. Create an application at [discord.com/developers/applications](https://discord.com/developers/applications), open **Bot**, copy the token, and ensure the bot can be DMed.
+2. Set `DISCORD_BOT_TOKEN` and `DISCORD_OWNER_ID` in the local `.env` and restart the dashboard. Both values stay local and never enter the database or portable exports.
+3. Under **Settings → Notifications**, enable alerts, then enable **Settings → Discord → Direct-message alerts**.
 
 Verification and status:
 
-- **Verify connection** (Settings) checks the bot token with the Telegram `getMe` call and confirms the chat is reachable.
-- **Send test message** (Settings) delivers a message synchronously and reports the real result instead of just queuing it.
-- The Notifications panel shows live status: bot token validity, chat reachability, outbox counts (pending/sending/sent/dead), and the last delivery time or error.
-- From the terminal: `pnpm notify:status` prints the same report (and exits non-zero on failure), while `pnpm notify:test` sends a synchronous test message.
-- Telegram commands: while the dashboard runs, you can send `/status`, `/pipeline`, `/published`, `/test`, and `/help` to your bot and it replies. The dashboard long-polls the bot for incoming messages; commands are accepted only from the configured `TELEGRAM_CHAT_ID`. This is separate from alerts — it lets you query state from your phone.
+- **Send test DM** (Settings) delivers a message synchronously and reports the real result instead of just queuing it.
+- The Notifications panel shows live status: outbox counts (pending/sending/sent/dead), the last delivery time, and the last error.
+- The **Published** page has a **Send test publish notification** button to verify the success-alert chain.
 
 Enabled alerts notify on every publish **success and failure** across all publish paths (manual, automatic, and pipeline), marking whether the job waits for manual review or will retry automatically. Success messages include the post URL and ask you to confirm the post is live, since the local media is deleted only after you confirm it on the Published page. Repeated events for the same job are deduplicated, and delivery is retried with backoff. The dashboard checks the outbox every 15 seconds, so notifications follow the dashboard process; keep it running to deliver alerts.
-
-In addition to Telegram, alerts can be delivered to your **Discord DM** through the same outbox. Enable **Settings → Discord → Direct-message alerts**; the bot then DMs `DISCORD_OWNER_ID` on publish failures and successes, and **Send test DM** verifies delivery. Both channels are enabled or disabled independently under the shared master **Notifications** toggle. The **Published** page has a **Send test publish notification** button to verify the success-alert chain.
 
 ## Discord Commands
 
@@ -253,10 +249,10 @@ A lightweight Discord bot can answer status commands in your direct message. Set
 2. Set `DISCORD_BOT_TOKEN` and `DISCORD_OWNER_ID` in the local `.env` (enable Developer Mode in Discord, right-click your user, **Copy User ID** for the owner ID). Restart the dashboard.
 3. The bot connects when the dashboard runs (or start it standalone with `pnpm discord-bot`), then send commands in your DM with the bot using the `!` prefix:
 
-- `!status` — notification status: Telegram token/chat validity, outbox counts, last delivery/error.
+- `!status` — notification status: outbox counts, last delivery, and last error.
 - `!pipeline` — pipeline summary: enabled sources, pending/failed downloads, scheduled/attention publishes, published today/total, worker heartbeats.
 - `!published` — the latest 10 published posts with their links and whether local media is still present.
-- `!test` — send a test notification through the configured Telegram channel.
+- `!test` — send a test message to the owner DM through Discord.
 - `!help` — list commands.
 
 Commands are accepted only from `DISCORD_OWNER_ID` in a direct message. The bot token stays in `.env` and never enters the database or portable exports. When connected, the bot sets an online presence so it appears online in Discord.
@@ -278,8 +274,6 @@ Commands are accepted only from `DISCORD_OWNER_ID` in a direct message. The bot 
 | `pnpm db:backup` | Create a database-only snapshot |
 | `pnpm storage:audit` | Verify local media paths, sizes, and checksums |
 | `pnpm storage:clean` | Remove stale partial download files |
-| `pnpm notify:status` | Print Telegram notification status |
-| `pnpm notify:test` | Send a synchronous Telegram test message |
 | `pnpm discord-bot` | Run the Discord status bot standalone |
 
 ## Database Snapshots
@@ -353,7 +347,7 @@ Prefer PATH-based values (`yt-dlp`, `ffmpeg`, `ffprobe`) in `.env` so future too
 | `packages/publisher` | Captioning and Playwright publication |
 | `packages/scheduler` | Pipeline cadence and review scheduling |
 | `packages/operations` | Backup, audit, deletion, purge, and reset operations |
-| `packages/notifications` | Telegram delivery, outbox dispatch, and notification status |
+| `packages/notifications` | Outbox dispatch, publish-alert formatting, and notification delivery contracts |
 | `packages/discord-bot` | Owner-only Discord status commands via slash commands |
 | `packages/shared` | Logs, diagnostics, leases, and shared contracts |
 

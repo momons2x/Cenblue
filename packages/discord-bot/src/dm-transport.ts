@@ -1,8 +1,8 @@
 import { getActiveDiscordClient } from "./registry";
-import type { NotificationTransport, TelegramSendResult } from "@cenblu/notifications";
+import type { NotificationTransport, NotificationSendResult } from "@cenblu/notifications";
 
 export class DiscordDmTransport implements NotificationTransport {
-  async send(recipient: string, text: string): Promise<TelegramSendResult> {
+  async send(recipient: string, text: string): Promise<NotificationSendResult> {
     const client = getActiveDiscordClient();
     if (!client) return { ok: false, error: "Discord bot is not connected" };
     try {

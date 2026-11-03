@@ -1,8 +1,8 @@
 import { ActivityType, Client, GatewayIntentBits, type Message } from "discord.js";
 import type { Logger } from "pino";
 import { NotificationOutboxRepository, PipelineStatusRepository, prisma, RuntimeStatusRepository } from "@cenblu/database";
-import { NotificationStatusService, TelegramTransport } from "@cenblu/notifications";
-import { setActiveDiscordClient } from "./registry";
+import { setActiveDiscordClient, getActiveDiscordClient } from "./registry";
+import { DiscordDmTransport } from "./dm-transport";
 
 export const commandPrefix = "!";
 export const commandHelp = "Commands: !status, !pipeline, !published, !test, !help";
@@ -11,10 +11,6 @@ export type DiscordBotOptions = {
   token: string;
   ownerId: string;
   logger: Logger;
-  notification?: {
-    telegramBotToken: string | undefined;
-    telegramChatId: string | null;
-  };
   pipelineTimeZone?: string;
 };
 
@@ -94,16 +90,14 @@ export class DiscordBot {
 
   private async statusCommand(message: Message): Promise<void> {
     const outbox = new NotificationOutboxRepository(prisma);
-    const transport = this.options.notification?.telegramBotToken ? new TelegramTransport(this.options.notification.telegramBotToken) : null;
-    const status = await new NotificationStatusService(transport, outbox).withChat(this.options.notification?.telegramChatId ?? "");
+    const [summary, delivered, failure] = await Promise.all([outbox.statusSummary(), outbox.latestDelivery(), outbox.latestFailure()]);
     const lines = [
       "Notification status:",
-      `  Telegram: ${status.tokenConfigured ? (status.tokenValid ? `connected${status.botUsername ? ` (@${status.botUsername})` : ""}` : "token invalid") : "not configured"}`,
-      `  Chat: ${status.chatReachable ? "reachable" : "not reachable"}`,
-      `  Outbox: ${status.outbox.pending} pending · ${status.outbox.sent} sent · ${status.outbox.dead} dead`,
+      `  Discord: ${getActiveDiscordClient() ? "connected" : "not connected"}`,
+      `  Outbox: ${summary.pending} pending · ${summary.sent} sent · ${summary.dead} dead`,
     ];
-    if (status.lastDeliveredAt) lines.push(`  Last sent: ${new Date(status.lastDeliveredAt).toISOString()}`);
-    if (status.lastError) lines.push(`  Last error: ${status.lastError}`);
+    if (delivered) lines.push(`  Last sent: ${delivered.sentAt.toISOString()}`);
+    if (failure?.error) lines.push(`  Last error: ${failure.error}`);
     await message.reply(lines.join("\n"));
   }
 
@@ -113,16 +107,7 @@ export class DiscordBot {
   }
 
   private async testCommand(message: Message): Promise<void> {
-    const notification = this.options.notification;
-    if (!notification?.telegramBotToken) {
-      await message.reply("No Telegram token is configured in .env.");
-      return;
-    }
-    if (!notification.telegramChatId) {
-      await message.reply("No Telegram chat ID is configured in Settings.");
-      return;
-    }
-    const result = await new TelegramTransport(notification.telegramBotToken).send(notification.telegramChatId, "Cenblue test message — triggered from Discord.");
+    const result = await new DiscordDmTransport().send(this.options.ownerId, "Cenblue test message — notifications are working.");
     await message.reply(result.ok ? "Test message delivered." : `Test message failed: ${result.error ?? "unknown error"}`);
   }
 }

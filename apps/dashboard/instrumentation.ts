@@ -6,6 +6,4 @@ export async function register() {
   startNotificationDispatcher();
   const { startDiscordBot } = await import("./app/lib/discord-bot");
   await startDiscordBot();
-  const { startTelegramCommands } = await import("./app/lib/telegram-commands");
-  startTelegramCommands();
 }

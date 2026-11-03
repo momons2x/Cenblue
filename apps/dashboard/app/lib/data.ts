@@ -4,7 +4,6 @@ import { extname, relative, resolve } from "node:path";
 import { applyStoredSettings, browserBindingFingerprint, loadConfig } from "@cenblu/config";
 import { NotificationOutboxRepository, prisma, SettingsRepository } from "@cenblu/database";
 import { getActiveDiscordClient } from "@cenblu/discord-bot";
-import { NotificationStatusService, TelegramTransport } from "@cenblu/notifications";
 import { browserName, discoverInstalledChromiumBrowsers } from "@cenblu/publisher";
 
 export async function getOverview() {
@@ -125,9 +124,9 @@ export async function getSettings() {
     scheduleJitterMinutes: stored.SCHEDULE_JITTER_MINUTES ?? String(config.scheduleJitterMinutes),
     scheduleMinGapMinutes: stored.SCHEDULE_MIN_GAP_MINUTES ?? String(config.scheduleMinGapMinutes),
     notificationsEnabled: stored.NOTIFICATIONS_ENABLED ?? "false",
-    telegramChatId: stored.TELEGRAM_CHAT_ID ?? "",
-    telegramTokenConfigured: Boolean(config.telegramBotToken),
-    notificationStatus: await new NotificationStatusService(config.telegramBotToken ? new TelegramTransport(config.telegramBotToken) : null, new NotificationOutboxRepository(prisma)).withChat(stored.TELEGRAM_CHAT_ID ?? ""),
+    notificationOutbox: await new NotificationOutboxRepository(prisma).statusSummary(),
+    notificationLastDeliveredAt: (await new NotificationOutboxRepository(prisma).latestDelivery())?.sentAt.toISOString() ?? null,
+    notificationLastError: (await new NotificationOutboxRepository(prisma).latestFailure())?.error ?? null,
     discordNotificationsEnabled: stored.NOTIFICATIONS_DISCORD_ENABLED ?? "false",
     discordBotTokenConfigured: Boolean(config.discordBotToken),
     discordOwnerConfigured: Boolean(config.discordOwnerId),

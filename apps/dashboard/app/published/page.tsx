@@ -16,7 +16,7 @@ export default async function PublishedPage({ searchParams }: { searchParams: Pr
   return <Shell title="Published" eyebrow="Cenblue / output archive">
     {params.actionError && <div className="toast error" role="alert">{params.actionError}</div>}
     {params.publishTest === "queued" && <div className="toast bookmark-success" role="status">Test publish notification queued for delivery.</div>}
-    {params.publishTest === "error" && <div className="toast error" role="alert">No notification channel is configured. Enable Telegram or Discord notifications in Settings first.</div>}
+    {params.publishTest === "error" && <div className="toast error" role="alert">No notification channel is configured. Enable Discord notifications in Settings first.</div>}
     <section className="panel">
       <div className="panel-head"><div><p className="eyebrow">Publication history</p><h3>{records.length} published post{records.length === 1 ? "" : "s"}</h3></div><div className="actions"><ActionForm action={simulatePublishedPost}><SubmitButton className="small-button" pending="Sending…">Send test publish notification</SubmitButton></ActionForm></div></div>
       {records.length === 0 ? <Empty>Successful publications will be archived here.</Empty> : <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,19rem),1fr))] gap-4">{records.map((record) => {

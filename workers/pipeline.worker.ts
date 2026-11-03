@@ -40,7 +40,6 @@ async function main(): Promise<void> {
       if (config.publishMode !== "AUTOMATIC") return false;
       await runtime.update("pipeline", "RUNNING", "publish");
       const notifier = await createPublishNotifier(prisma, {
-        telegramBotToken: config.telegramBotToken,
         discordBotToken: config.discordBotToken,
         discordOwnerId: config.discordOwnerId,
       }, async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null);

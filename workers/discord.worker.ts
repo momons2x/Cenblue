@@ -7,12 +7,10 @@ async function main(): Promise<void> {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   if (!config.discordBotToken || !config.discordOwnerId) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env to run the Discord bot.");
   const logger = createLogger({ directory: config.logStoragePath, component: "discord-bot", maxBytes: config.logMaxBytes, retainedFiles: config.logRetainedFiles });
-  const stored = await new SettingsRepository(prisma).getAll();
   const bot = new DiscordBot({
     token: config.discordBotToken,
     ownerId: config.discordOwnerId,
     logger,
-    notification: { telegramBotToken: config.telegramBotToken ?? undefined, telegramChatId: stored.TELEGRAM_CHAT_ID ?? null },
     pipelineTimeZone: config.timezone,
   });
   await bot.start();

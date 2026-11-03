@@ -55,8 +55,6 @@
     "storage:audit": "tsx workers/maintenance.worker.ts audit",
     "storage:clean": "tsx workers/maintenance.worker.ts clean-temp",
     "media:purge-published": "tsx workers/maintenance.worker.ts purge-published",
-    "notify:status": "tsx workers/notify.worker.ts status",
-    "notify:test": "tsx workers/notify.worker.ts test",
     "discord-bot": "tsx workers/discord.worker.ts",
     "db:backup": "tsx workers/maintenance.worker.ts backup",
     "config:export": "tsx workers/config.worker.ts export",

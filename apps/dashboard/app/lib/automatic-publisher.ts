@@ -29,7 +29,6 @@ export function startAutomaticPublisher(): void {
       if (config.publishMode !== "AUTOMATIC") return;
       const repository = new PublishRepository(prisma);
       const notifier = await createPublishNotifier(prisma, {
-        telegramBotToken: config.telegramBotToken,
         discordBotToken: config.discordBotToken,
         discordOwnerId: config.discordOwnerId,
       }, async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null);

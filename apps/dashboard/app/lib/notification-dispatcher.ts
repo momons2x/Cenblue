@@ -2,7 +2,7 @@ import pino from "pino";
 import { applyStoredSettings, loadConfig } from "@cenblu/config";
 import { NotificationOutboxRepository, prisma, SettingsRepository } from "@cenblu/database";
 import { DiscordDmTransport } from "@cenblu/discord-bot";
-import { NotificationDispatcher, TelegramTransport, type NotificationTransport } from "@cenblu/notifications";
+import { NotificationDispatcher, type NotificationTransport } from "@cenblu/notifications";
 
 const cadenceMs = 15_000;
 
@@ -22,7 +22,6 @@ export function startNotificationDispatcher(): void {
       const config = applyStoredSettings(loadConfig(), settings);
       const outbox = new NotificationOutboxRepository(prisma);
       const transports: Record<string, NotificationTransport> = {};
-      if (config.telegramBotToken) transports.telegram = new TelegramTransport(config.telegramBotToken);
       if (config.discordBotToken && settings.NOTIFICATIONS_DISCORD_ENABLED === "true") transports.discord = new DiscordDmTransport();
       if (Object.keys(transports).length === 0) return;
       const dispatcher = new NotificationDispatcher(

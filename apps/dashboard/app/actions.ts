@@ -11,7 +11,7 @@ import { applyStoredSettings, browserBindingFingerprint, browserIds, loadConfig 
 import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, NotificationOutboxRepository, OperationalEventRepository, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
 import { FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, FfmpegPerceptualVideoHasher } from "@cenblu/downloader";
-import { createPublishNotifier, NotificationEmitter, TelegramTransport, type NotificationChannel } from "@cenblu/notifications";
+import { createPublishNotifier, NotificationEmitter, type NotificationChannel } from "@cenblu/notifications";
 import { DiscordDmTransport } from "@cenblu/discord-bot";
 import { buildBatchSchedule } from "@cenblu/scheduler";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
@@ -452,7 +452,7 @@ export async function recoverIncorrectPublishedPost(formData: FormData) {
 
 async function buildNotificationEmitter(config: ReturnType<typeof applyStoredSettings>) {
   const settings = await new SettingsRepository(prisma).getAll();
-  const hasAnyChannel = (config.telegramBotToken && settings.TELEGRAM_CHAT_ID) || (config.discordBotToken && config.discordOwnerId && settings.NOTIFICATIONS_DISCORD_ENABLED === "true");
+  const hasAnyChannel = config.discordBotToken && config.discordOwnerId && settings.NOTIFICATIONS_DISCORD_ENABLED === "true";
   if (settings.NOTIFICATIONS_ENABLED === "true" && hasAnyChannel) {
     return new NotificationEmitter(
       new OperationalEventRepository(prisma),
@@ -467,7 +467,6 @@ async function buildNotificationEmitter(config: ReturnType<typeof applyStoredSet
 async function notificationChannelMap(config: ReturnType<typeof applyStoredSettings>): Promise<Partial<Record<NotificationChannel, string>>> {
   const stored = await new SettingsRepository(prisma).getAll();
   const channels: Partial<Record<NotificationChannel, string>> = {};
-  if (config.telegramBotToken && stored.TELEGRAM_CHAT_ID) channels.telegram = stored.TELEGRAM_CHAT_ID;
   if (config.discordBotToken && config.discordOwnerId && stored.NOTIFICATIONS_DISCORD_ENABLED === "true") channels.discord = config.discordOwnerId;
   return channels;
 }
@@ -486,7 +485,6 @@ async function dashboardPublisher(publisherIdentityId: string) {
   const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
   const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
   const notifier = await createPublishNotifier(prisma, {
-    telegramBotToken: config.telegramBotToken,
     discordBotToken: config.discordBotToken,
     discordOwnerId: config.discordOwnerId,
   }, async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null);
@@ -986,9 +984,8 @@ export async function saveReviewSettings(formData: FormData) {
 export async function saveNotificationSettings(formData: FormData) {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   const enabled = z.enum(["true", "false"]).parse(formData.get("notificationsEnabled"));
-  const chatId = z.string().trim().parse(formData.get("telegramChatId") ?? "");
-  if (enabled === "true" && !config.telegramBotToken && !config.discordBotToken) throw new Error("Add a Telegram or Discord bot token to .env before enabling notifications.");
-  await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_ENABLED: enabled, TELEGRAM_CHAT_ID: chatId });
+  if (enabled === "true" && !config.discordBotToken) throw new Error("Add a Discord bot token to .env before enabling notifications.");
+  await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_ENABLED: enabled });
   refresh("/settings");
   redirect("/settings?notificationsSaved=1");
 }
@@ -1002,19 +999,6 @@ export async function saveDiscordNotificationSettings(formData: FormData) {
   redirect("/settings?discordNotificationsSaved=1");
 }
 
-export async function sendTestNotification() {
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const stored = await new SettingsRepository(prisma).getAll();
-  if (!config.telegramBotToken) throw new Error("Add TELEGRAM_BOT_TOKEN to .env to send a test message.");
-  const chatId = stored.TELEGRAM_CHAT_ID;
-  if (!chatId) throw new Error("Set the Telegram chat ID before sending a test message.");
-  const transport = new TelegramTransport(config.telegramBotToken);
-  const result = await transport.send(chatId, "Cenblue test message — notifications are working.");
-  refresh("/settings");
-  if (result.ok) redirect("/settings?notificationTest=delivered");
-  redirect(`/settings?notificationTest=error&notificationTestError=${encodeURIComponent(result.error ?? "The test message could not be delivered.")}`);
-}
-
 export async function sendDiscordTestNotification() {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   if (!config.discordBotToken || !config.discordOwnerId) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env to send a test message.");
@@ -1022,34 +1006,6 @@ export async function sendDiscordTestNotification() {
   refresh("/settings");
   if (result.ok) redirect("/settings?discordNotificationTest=delivered");
   redirect(`/settings?discordNotificationTest=error&discordNotificationTestError=${encodeURIComponent(result.error ?? "The test message could not be delivered.")}`);
-}
-
-export async function verifyNotificationConnection() {
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const stored = await new SettingsRepository(prisma).getAll();
-  if (!config.telegramBotToken) throw new Error("Add TELEGRAM_BOT_TOKEN to .env before verifying the connection.");
-  const transport = new TelegramTransport(config.telegramBotToken);
-  const bot = await transport.getMe();
-  if (!bot.ok) {
-    refresh("/settings");
-    redirect(`/settings?notificationVerify=tokenError&notificationVerifyError=${encodeURIComponent(bot.error ?? "The bot token could not be validated.")}`);
-  }
-  const query = new URLSearchParams({ notificationVerify: "ok", botUsername: bot.username ?? "", botName: bot.name ?? "" });
-  const chatId = stored.TELEGRAM_CHAT_ID;
-  if (chatId) {
-    const chat = await transport.getChat(chatId);
-    if (chat.ok) {
-      query.set("chatTitle", chat.title ?? "");
-      query.set("notificationVerify", "all");
-    } else {
-      query.set("chatError", encodeURIComponent(chat.error ?? "The chat ID could not be validated."));
-      query.set("notificationVerify", "chatError");
-    }
-  } else {
-    query.set("notificationVerify", "noChat");
-  }
-  refresh("/settings");
-  redirect(`/settings?${query}`);
 }
 
 export async function simulatePublishedPost() {

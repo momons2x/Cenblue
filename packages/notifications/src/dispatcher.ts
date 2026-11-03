@@ -1,5 +1,5 @@
 import type { NotificationOutboxRepository } from "@cenblu/database";
-import type { NotificationTransport } from "./telegram-transport";
+import type { NotificationTransport } from "./transport";
 
 export type DispatcherConfig = {
   maxAttempts: number;
