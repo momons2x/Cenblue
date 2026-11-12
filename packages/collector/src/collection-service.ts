@@ -55,6 +55,7 @@ export class CollectionService {
       for (const source of sources) {
         if (await this.progress?.shouldCancel?.()) { result.cancelled = true; break; }
         const collectedAt = new Date();
+        const sourceStartedAt = Date.now();
         await this.progress?.sourceStarting?.({ id: source.id, username: source.username, targetNew: Math.min(source.collectLimit, this.postsPerSource) });
         try {
           let latestProgress: CollectionScanProgress | undefined;
@@ -76,6 +77,7 @@ export class CollectionService {
             collected: collected.length,
             inserted: persisted.inserted,
             duplicates: persisted.duplicates,
+            durationMs: Date.now() - sourceStartedAt,
           }, "Source collection completed");
           const cancelled = latestProgress?.stopReason === "cancelled";
           await this.progress?.sourceFinished?.({ id: source.id, failed: false, cancelled, inserted: persisted.inserted, stopReason: latestProgress?.stopReason });

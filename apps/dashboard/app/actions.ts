@@ -8,10 +8,10 @@ import { basename, relative, resolve } from "node:path";
 import { z } from "zod";
 import { CollectionService, PlaywrightTimelineBrowser, XPlaywrightCollector } from "@cenblu/collector";
 import { applyStoredSettings, browserBindingFingerprint, browserIds, loadConfig } from "@cenblu/config";
-import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, NotificationOutboxRepository, OperationalEventRepository, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
+import { BrowserIdentityRepository, CollectionRunRepository, DatabaseExclusiveLease, identityFingerprint, identityLeaseName, prisma, PublishRepository, RuntimeStatusRepository, SchedulerRepository, SettingsRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
 import { DownloadRepository } from "@cenblu/database";
 import { FfmpegVideoCompressor, FfprobeService, MediaFiles, NodeProcessRunner, FfmpegPerceptualVideoHasher } from "@cenblu/downloader";
-import { createPublishNotifier, NotificationEmitter, type NotificationChannel } from "@cenblu/notifications";
+import { createPublishNotifier } from "@cenblu/notifications";
 import { DiscordDmTransport } from "@cenblu/discord-bot";
 import { buildBatchSchedule } from "@cenblu/scheduler";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
@@ -27,6 +27,14 @@ const limit = z.coerce.number().int().min(1).max(100);
 const manualImageTypes = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif" } as const;
 
 function refresh(...paths: string[]) { paths.forEach((path) => revalidatePath(path)); }
+
+function redirectWithNotice(path: string, message: string, tone: "success" | "error" | "info" = "success"): never {
+  const [base, search = ""] = path.split("?");
+  const query = new URLSearchParams(search);
+  query.set("notice", message);
+  query.set("tone", tone);
+  redirect(`${base}?${query.toString()}`);
+}
 
 function inside(root: string, path: string): boolean {
   const value = relative(resolve(root), resolve(path));
@@ -445,35 +453,9 @@ export async function recoverIncorrectPublishedPost(formData: FormData) {
     await new PublishRepository(prisma).recoverIncorrectPublishedPost(publishJobId);
   } catch (error) {
     const message = error instanceof Error && "code" in error && error.code === "ENOENT" ? "A publication cannot return to Review because its local video is missing." : error instanceof Error ? error.message : "The publication could not be recovered.";
-    redirect(`/published?actionError=${encodeURIComponent(message)}`);
+    redirectWithNotice("/published", message, "error");
   }
   refresh("/published", "/review", "/queue", "/");
-}
-
-async function buildNotificationEmitter(config: ReturnType<typeof applyStoredSettings>) {
-  const settings = await new SettingsRepository(prisma).getAll();
-  const hasAnyChannel = config.discordBotToken && config.discordOwnerId && settings.NOTIFICATIONS_DISCORD_ENABLED === "true";
-  if (settings.NOTIFICATIONS_ENABLED === "true" && hasAnyChannel) {
-    return new NotificationEmitter(
-      new OperationalEventRepository(prisma),
-      new NotificationOutboxRepository(prisma),
-      undefined,
-      async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null,
-    );
-  }
-  return null;
-}
-
-async function notificationChannelMap(config: ReturnType<typeof applyStoredSettings>): Promise<Partial<Record<NotificationChannel, string>>> {
-  const stored = await new SettingsRepository(prisma).getAll();
-  const channels: Partial<Record<NotificationChannel, string>> = {};
-  if (config.discordBotToken && config.discordOwnerId && stored.NOTIFICATIONS_DISCORD_ENABLED === "true") channels.discord = config.discordOwnerId;
-  return channels;
-}
-
-async function notificationSettings(config: ReturnType<typeof applyStoredSettings>): Promise<{ enabled: boolean; channels: Partial<Record<NotificationChannel, string>> }> {
-  const stored = await new SettingsRepository(prisma).getAll();
-  return { enabled: stored.NOTIFICATIONS_ENABLED === "true", channels: await notificationChannelMap(config) };
 }
 
 async function dashboardPublisher(publisherIdentityId: string) {
@@ -516,7 +498,7 @@ export async function publishNow(formData: FormData) {
   } catch (error) {
     actionError = error instanceof Error ? error.message : "Publishing failed.";
   }
-  if (actionError) redirect(`/queue?actionError=${encodeURIComponent(actionError)}`);
+  if (actionError) redirectWithNotice("/queue", actionError, "error");
   refresh("/", "/queue", "/review", "/downloads", "/published");
 }
 
@@ -532,7 +514,8 @@ export async function processPendingDownloads(formData?: FormData) {
   const limit = formData?.has("limit") ? z.coerce.number().int().min(1).max(1_000).parse(formData.get("limit")) : undefined;
   const started = await triggerPendingDownloads(limit);
   refresh("/", "/queue", "/downloads");
-  redirect(`/queue?${started ? "downloadStarted=1" : "downloadBusy=1"}`);
+  if (started) redirectWithNotice("/queue", "Downloads started in the background. You can keep browsing — progress shows below.");
+  redirectWithNotice("/queue", "A download run is already active. Watch its progress below.", "info");
 }
 
 export async function bulkRetryDownloads(formData: FormData) {
@@ -546,7 +529,7 @@ export async function bulkDownloadNow(formData: FormData) {
   await bulkRetryDownloads(formData);
   await triggerPendingDownloads();
   refresh("/", "/queue", "/downloads");
-  redirect("/queue?downloadStarted=1");
+  redirectWithNotice("/queue", "Downloads started in the background. You can keep browsing — progress shows below.");
 }
 
 export async function removeMedia(formData: FormData) {
@@ -557,7 +540,7 @@ export async function removeMedia(formData: FormData) {
     await new MediaRemovalService(prisma).remove(sourcePostId, { videos: config.videoStoragePath, thumbnails: config.thumbnailStoragePath });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Local media could not be deleted.";
-    redirect(`${returnPath}?actionError=${encodeURIComponent(message)}`);
+    redirectWithNotice(returnPath, message, "error");
   }
   refresh("/downloads", "/review", "/queue", "/published", "/videos", "/");
 }
@@ -569,7 +552,7 @@ export async function confirmPublishedAndRemoveMedia(formData: FormData) {
     await new MediaRemovalService(prisma).removePublished(sourcePostId, { videos: config.videoStoragePath, thumbnails: config.thumbnailStoragePath });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Local media could not be deleted.";
-    redirect(`/published?actionError=${encodeURIComponent(message)}`);
+    redirectWithNotice("/published", message, "error");
   }
   refresh("/published", "/downloads", "/videos", "/");
 }
@@ -750,7 +733,7 @@ export async function createBrowserIdentity(formData: FormData) {
   await mkdir(profilePath, { recursive: true });
   await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
   refresh("/settings", "/sources", "/review", "/");
-  redirect(`/settings?profileOpened=${encodeURIComponent(identity.id)}`);
+  redirectWithNotice("/settings", "Browser identity created. Sign in to X in the opened browser, close it completely, then verify the identity.");
 }
 
 export async function openIdentityLogin(formData: FormData) {
@@ -767,7 +750,7 @@ export async function openIdentityLogin(formData: FormData) {
   await mkdir(profilePath, { recursive: true });
   await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
   refresh("/settings", "/");
-  redirect(`/settings?profileOpened=${encodeURIComponent(identity.id)}`);
+  redirectWithNotice("/settings", `Profile opened. Sign in as ${identity.expectedUsername ? `@${identity.expectedUsername}` : identity.label}, close the browser completely, then verify this identity.`);
 }
 
 export async function addIdentityProfile(formData: FormData) {
@@ -785,7 +768,7 @@ export async function addIdentityProfile(formData: FormData) {
   await mkdir(profilePath, { recursive: true });
   await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
   refresh("/settings", "/");
-  redirect(`/settings?profileOpened=${encodeURIComponent(identity.id)}`);
+  redirectWithNotice("/settings", `Profile opened. Sign in as @${expectedUsername}, close the browser completely, then verify this identity.`);
 }
 
 export async function updateIdentityBrowser(formData: FormData) {
@@ -865,7 +848,7 @@ export async function deleteIdentityProfile(formData: FormData) {
   await repository.clearVerification(identity.id, new Date());
   await prisma.browserIdentity.update({ where: { id: identity.id }, data: { expectedUsername: null, enabled: false, automaticEnabled: false } });
   refresh("/settings", "/");
-  redirect(`/settings?profileDeleted=${encodeURIComponent(identity.id)}`);
+  redirectWithNotice("/settings", `Browser profile for ${identity.label} deleted. Its local cookies and X session were removed.`);
 }
 
 export async function deleteIdentityPermanently(formData: FormData) {
@@ -887,7 +870,7 @@ export async function deleteIdentityPermanently(formData: FormData) {
     prisma.browserIdentity.delete({ where: { id: identityId } }),
   ]);
   refresh("/settings", "/", "/queue", "/review", "/published");
-  redirect(`/settings?identityDeleted=${encodeURIComponent(identity.id)}`);
+  redirectWithNotice("/settings", `${identity.label} permanently deleted. Its profile files were removed and its work was detached.`);
 }
 
 async function withIdentityLeases<T>(identityIds: string[], operation: () => Promise<T>): Promise<T> {
@@ -906,7 +889,7 @@ export async function clearAllBrowserProfiles(formData: FormData) {
   await prisma.browserIdentity.updateMany({ data: { expectedUsername: null, verifiedUsername: null, verifiedAt: null, verifiedFingerprint: null, verificationError: null, profileDeletedAt: new Date(), enabled: false, automaticEnabled: false } });
   await new SettingsRepository(prisma).deleteMany([...browserSessionKeys("collector"), ...browserSessionKeys("publisher")]);
   refresh("/settings", "/");
-  redirect(`/settings?allProfilesDeleted=${identities.length}`);
+  redirectWithNotice("/settings", `All managed browser profiles were deleted. ${identities.length} identities were preserved and now require login and verification.`);
 }
 
 export async function assignSourceCollector(formData: FormData) {
@@ -972,13 +955,13 @@ export async function saveCaptionSettings(formData: FormData) {
   const templates = z.string().max(10_000).parse(formData.get("captionTemplates"));
   await new SettingsRepository(prisma).setMany({ CAPTION_TEMPLATES: templates });
   refresh("/settings", "/review");
-  redirect("/settings?captionSaved=1");
+  redirectWithNotice("/settings", "Caption settings saved.");
 }
 
 export async function saveReviewSettings(formData: FormData) {
   await new SettingsRepository(prisma).setMany({ REVIEW_VIDEO_PREVIEW_ENABLED: z.enum(["true", "false"]).parse(formData.get("videoPreviewEnabled")) });
   refresh("/settings", "/review");
-  redirect("/settings?reviewSaved=1");
+  redirectWithNotice("/settings", "Review settings saved.");
 }
 
 export async function saveNotificationSettings(formData: FormData) {
@@ -987,7 +970,7 @@ export async function saveNotificationSettings(formData: FormData) {
   if (enabled === "true" && !config.discordBotToken) throw new Error("Add a Discord bot token to .env before enabling notifications.");
   await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_ENABLED: enabled });
   refresh("/settings");
-  redirect("/settings?notificationsSaved=1");
+  redirectWithNotice("/settings", "Notification settings saved.");
 }
 
 export async function saveDiscordNotificationSettings(formData: FormData) {
@@ -996,7 +979,7 @@ export async function saveDiscordNotificationSettings(formData: FormData) {
   if (enabled === "true" && (!config.discordBotToken || !config.discordOwnerId)) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env before enabling Discord notifications.");
   await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_DISCORD_ENABLED: enabled });
   refresh("/settings");
-  redirect("/settings?discordNotificationsSaved=1");
+  redirectWithNotice("/settings", "Discord notification settings saved.");
 }
 
 export async function sendDiscordTestNotification() {
@@ -1004,23 +987,8 @@ export async function sendDiscordTestNotification() {
   if (!config.discordBotToken || !config.discordOwnerId) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env to send a test message.");
   const result = await new DiscordDmTransport().send(config.discordOwnerId, "Cenblue test message — notifications are working.");
   refresh("/settings");
-  if (result.ok) redirect("/settings?discordNotificationTest=delivered");
-  redirect(`/settings?discordNotificationTest=error&discordNotificationTestError=${encodeURIComponent(result.error ?? "The test message could not be delivered.")}`);
-}
-
-export async function simulatePublishedPost() {
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const emitter = await buildNotificationEmitter(config);
-  const settings = await notificationSettings(config);
-  const emitted = emitter ? await emitter.emitPublishedPost({
-    jobId: `simulated-${Date.now()}`,
-    platformPostId: `SIMULATED-${Date.now()}`,
-    publisherIdentityId: null,
-    platformUrl: null,
-  }, settings) : false;
-  refresh("/published");
-  if (emitted) redirect("/published?publishTest=queued");
-  redirect("/published?publishTest=error");
+  if (result.ok) redirectWithNotice("/settings", "Test message delivered to your Discord DM.");
+  redirectWithNotice("/settings", `Test message failed: ${result.error ?? "The test message could not be delivered."}`, "error");
 }
 
 export async function publishManualPost(formData: FormData) {
@@ -1060,6 +1028,8 @@ export async function publishManualPost(formData: FormData) {
   } finally {
     if (imagePath) await rm(imagePath, { force: true }).catch(() => undefined);
   }
-  if (errorMessage) redirect(`/compose?error=${encodeURIComponent(errorMessage)}`);
-  redirect(`/compose?published=1${publishedUrl ? `&url=${encodeURIComponent(publishedUrl)}` : ""}`);
+  if (errorMessage) redirectWithNotice("/compose", errorMessage, "error");
+  const query = new URLSearchParams({ notice: "Post published successfully.", tone: "success" });
+  if (publishedUrl) query.set("url", publishedUrl);
+  redirect(`/compose?${query.toString()}`);
 }

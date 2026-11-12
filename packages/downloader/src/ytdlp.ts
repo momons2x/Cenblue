@@ -15,6 +15,7 @@ export class YtDlpService implements VideoDownloader {
     private readonly browserCookiesProfile?: string,
     private readonly browserId: BrowserId = "msedge",
     private readonly profileResolver?: (collectorIdentityId: string) => Promise<{ profilePath: string; browserId: BrowserId; runExclusive?: (operation: () => Promise<void>) => Promise<void> }>,
+    private readonly concurrentFragments = 4,
   ) {}
 
   async download(sourceUrl: string, outputPath: string, thumbnailPath: string, collectorIdentityId?: string | null): Promise<void> {
@@ -33,6 +34,7 @@ export class YtDlpService implements VideoDownloader {
       "--socket-timeout", "30",
       "--retries", "3",
       "--fragment-retries", "5",
+      "--concurrent-fragments", String(this.concurrentFragments),
       "--output", outputPath,
       "--output", `thumbnail:${thumbnailPath}`,
       sourceUrl,

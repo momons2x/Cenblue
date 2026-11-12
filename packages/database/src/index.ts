@@ -18,4 +18,4 @@ export { OperationalEventRepository, type OperationalEventInput } from "./operat
 export { NotificationOutboxRepository, type ClaimedNotification, type NotificationEnqueueInput } from "./notification-outbox.repository";
 export { isTransientDatabaseError, withDatabaseRetry } from "./retry";
 export { DatabaseExclusiveLease } from "./exclusive-lease";
-export type { SourceAccount, SourcePost, DownloadJob, MediaAsset, PublishJob, PublishedPost, SchedulerLock, AppSetting, CollectionRun, RuntimeStatus, OperationalEvent, NotificationOutbox } from "@prisma/client";
+export type { Prisma, SourceAccount, SourcePost, DownloadJob, MediaAsset, PublishJob, PublishedPost, SchedulerLock, AppSetting, CollectionRun, RuntimeStatus, OperationalEvent, NotificationOutbox } from "@prisma/client";

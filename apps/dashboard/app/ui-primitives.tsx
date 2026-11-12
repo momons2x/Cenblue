@@ -9,11 +9,17 @@ export function Badge({ value }: { value: string | null | undefined }) {
   return <span className={`badge ${tone}`}>{(value ?? "unknown").replaceAll("_", " ")}</span>;
 }
 
-export function Stat({ label, value, detail, accent = "blue" }: { label: string; value: number | string; detail?: string; accent?: string }) {
-  const border = { blue: "border-t-accent", violet: "border-t-accent", orange: "border-t-warning", mint: "border-t-success" }[accent] ?? "border-t-accent";
-  return <div className={`min-w-0 border border-line border-t-[3px] ${border} bg-surface p-5`}><p className="mb-4 [overflow-wrap:anywhere] text-xs text-muted">{label}</p><strong className="block [overflow-wrap:anywhere] text-[clamp(2rem,7vw,3rem)] leading-none tracking-tight text-ink">{value}</strong>{detail && <small className="mt-3 block [overflow-wrap:anywhere] text-xs text-muted">{detail}</small>}</div>;
+export function Stat({ label, value, detail, accent = "blue" }: { label: string; value: number | string; detail?: string; accent?: "blue" | "orange" | "mint" }) {
+  return <div className={`stat-card accent-${accent}`}><p>{label}</p><strong>{value}</strong>{detail && <small>{detail}</small>}</div>;
 }
 
 export function Empty({ children }: { children: React.ReactNode }) { return <div className="empty"><span className="empty-icon">∅</span><p>{children}</p></div>; }
+
+export function FlashNotice({ notice, tone = "success", children }: { notice?: string | null; tone?: string | null; children?: React.ReactNode }) {
+  if (!notice && !children) return null;
+  const normalized = tone === "error" || tone === "warning" || tone === "info" ? tone : "success";
+  const className = normalized === "success" ? "toast bookmark-success" : normalized === "info" ? "toast" : `toast ${normalized}`;
+  return <div className={className} role={normalized === "error" ? "alert" : "status"}>{notice}{notice && children ? " " : null}{children}</div>;
+}
 
 export function FormMessage({ children }: { children: React.ReactNode }) { return <p className="form-note">{children}</p>; }

@@ -74,6 +74,7 @@ The complete `storage/` tree is ignored by Git except its placeholder. Never for
 | `PUBLISHER_PROFILE_DIRECTORY` | Optional publisher internal profile |
 | `PUBLISH_MODE` | `ASSISTED` or `AUTOMATIC` |
 | `DOWNLOAD_CONCURRENCY` | Parallel download workers, from 1 to 3 |
+| `DOWNLOAD_CONCURRENT_FRAGMENTS` | yt-dlp fragment downloads per file, from 1 to 8 |
 | `DOWNLOAD_BATCH_LIMIT` | Maximum download attempts per cycle |
 | `VIDEO_STORAGE_PATH` | Final media directory |
 | `BACKUP_STORAGE_PATH` | SQLite snapshot directory |
@@ -170,6 +171,14 @@ Session cookies are local-only. This repository does not include the owner's bro
 pnpm dev
 ```
 
+`start-server.bat` is the everyday launcher: it starts the dashboard and opens VS Code, or `start-server.bat --no-editor` skips the editor. Pass `--prod` to serve the compiled production build instead of the dev server. The first production start builds automatically when needed, and `--rebuild` forces a fresh build after code changes:
+
+```powershell
+.\start-server.bat --prod --no-editor
+```
+
+Development mode keeps hot reload and is the right choice while editing code; production mode has faster page loads and no per-request compilation.
+
 Open <http://127.0.0.1:3000>. Dashboard scripts explicitly bind to loopback; this is a safety boundary, not a substitute for authentication. A normal workflow is:
 
 1. Add and verify browser identities under **Settings**.
@@ -263,6 +272,7 @@ Commands are accepted only from `DISCORD_OWNER_ID` in a direct message. The bot 
 | --- | --- |
 | `pnpm dev` | Start the dashboard in development mode |
 | `pnpm build` | Build the dashboard for production |
+| `pnpm start` | Serve the production build |
 | `pnpm collector` | Run one collector cycle |
 | `pnpm source:add -- username 5` | Add a source from the CLI |
 | `pnpm downloader` | Process one bounded download cycle |

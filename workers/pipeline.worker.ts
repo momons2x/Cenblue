@@ -27,7 +27,7 @@ async function main(): Promise<void> {
       const identity = await prisma.browserIdentity.findUniqueOrThrow({ where: { id: collectorIdentityId } });
       const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
       return { profilePath: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.collectorBrowserId, runExclusive: (operation: () => Promise<void>) => lease.run(operation) };
-    }),
+    }, config.downloadConcurrentFragments),
     new FfprobeService(processRunner, config.ffprobeBinary), new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath), logger, 3,
     new FfmpegPerceptualVideoHasher(processRunner, config.ffmpegBinary),
   );

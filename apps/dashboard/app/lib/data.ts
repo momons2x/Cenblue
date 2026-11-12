@@ -2,7 +2,7 @@ import "server-only";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { applyStoredSettings, browserBindingFingerprint, loadConfig } from "@cenblu/config";
-import { NotificationOutboxRepository, prisma, SettingsRepository } from "@cenblu/database";
+import { NotificationOutboxRepository, prisma, SettingsRepository, type Prisma } from "@cenblu/database";
 import { getActiveDiscordClient } from "@cenblu/discord-bot";
 import { browserName, discoverInstalledChromiumBrowsers } from "@cenblu/publisher";
 
@@ -49,9 +49,15 @@ export async function getQueue(filters: { status?: string; source?: string; publ
   const page = Math.max(filters.page ?? 1, 1);
   const take = 50;
   const sourcePost = source ? { sourceAccount: { username: source } } : undefined;
-  const [downloads, publishes, sources, downloadStatuses, publishStatuses] = await Promise.all([
-    prisma.downloadJob.findMany({ where: { ...(status ? { status } : {}), ...(sourcePost ? { sourcePost } : {}) }, take, skip: (page - 1) * take, orderBy: { updatedAt: "desc" }, include: { sourcePost: { include: { sourceAccount: true, mediaAsset: true } } } }),
-    prisma.publishJob.findMany({ where: { ...(status ? { status } : {}), ...(sourcePost ? { sourcePost } : {}), ...(filters.publisher ? { publisherIdentityId: filters.publisher } : {}) }, take, skip: (page - 1) * take, orderBy: [{ scheduledFor: "asc" }, { updatedAt: "desc" }], include: { sourcePost: { include: { sourceAccount: true } }, mediaAsset: true, publisherIdentity: true } }),
+  const downloadWhere: Prisma.DownloadJobWhereInput = { ...(status ? { status } : {}), ...(sourcePost ? { sourcePost } : {}) };
+  const publishWhere: Prisma.PublishJobWhereInput = { ...(status ? { status } : {}), ...(sourcePost ? { sourcePost } : {}), ...(filters.publisher ? { publisherIdentityId: filters.publisher } : {}) };
+  const [downloads, publishes, downloadTotal, publishTotal, actionableDownloads, actionablePublishes, sources, downloadStatuses, publishStatuses] = await Promise.all([
+    prisma.downloadJob.findMany({ where: downloadWhere, take, skip: (page - 1) * take, orderBy: { updatedAt: "desc" }, include: { sourcePost: { include: { sourceAccount: true, mediaAsset: true } } } }),
+    prisma.publishJob.findMany({ where: publishWhere, take, skip: (page - 1) * take, orderBy: [{ scheduledFor: "asc" }, { updatedAt: "desc" }], include: { sourcePost: { include: { sourceAccount: true } }, mediaAsset: true, publisherIdentity: true } }),
+    prisma.downloadJob.count({ where: downloadWhere }),
+    prisma.publishJob.count({ where: publishWhere }),
+    prisma.downloadJob.count({ where: { ...downloadWhere, status: { in: ["PENDING", "FAILED", "RETRY_WAIT", "CANCELLED"] } } }),
+    prisma.publishJob.count({ where: { ...publishWhere, status: { in: ["APPROVED", "RETRY_WAIT", "MANUAL_ATTENTION", "FAILED"] } } }),
     prisma.sourceAccount.findMany({ where: { archivedAt: null }, orderBy: { username: "asc" }, select: { username: true } }),
     prisma.downloadJob.findMany({ distinct: ["status"], select: { status: true } }),
     prisma.publishJob.findMany({ distinct: ["status"], select: { status: true } }),
@@ -60,23 +66,57 @@ export async function getQueue(filters: { status?: string; source?: string; publ
   const persistedStatuses = [...downloadStatuses, ...publishStatuses].map((item) => item.status);
   const statuses = [...new Set([...canonicalStatuses, ...persistedStatuses])];
   const publishers = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER" }, orderBy: { label: "asc" }, select: { id: true, label: true, expectedUsername: true } });
-  return { downloads, publishes, sources, statuses, publishers, page };
+  return { downloads, publishes, sources, statuses, publishers, page, pageSize: take, downloadTotal, publishTotal, actionableDownloads, actionablePublishes };
 }
 
-export async function getDownloads(source?: string) {
+export async function getDownloads(source?: string, page = 1) {
   const username = source?.trim().toLowerCase();
-  return prisma.mediaAsset.findMany({ where: username ? { sourcePost: { sourceAccount: { username } } } : undefined, orderBy: { createdAt: "desc" }, include: { sourcePost: { include: { sourceAccount: true, downloadJob: true, publishJobs: { include: { publishedPost: true, publisherIdentity: true } } } } } });
+  const pageSize = 50;
+  const current = Math.max(page, 1);
+  const where = username ? { sourcePost: { sourceAccount: { username } } } : undefined;
+  const [assets, total, eligible] = await Promise.all([
+    prisma.mediaAsset.findMany({ where, orderBy: { createdAt: "desc" }, take: pageSize, skip: (current - 1) * pageSize, include: { sourcePost: { include: { sourceAccount: true, downloadJob: true, publishJobs: { include: { publishedPost: true, publisherIdentity: true } } } } } }),
+    prisma.mediaAsset.count({ where }),
+    prisma.sourcePost.count({ where: { status: "DOWNLOADED", mediaAsset: { is: { localRemovedAt: null } }, publishJobs: { none: {} }, ...(username ? { sourceAccount: { username } } : {}) } }),
+  ]);
+  return { assets, total, eligible, page: current, pageSize };
 }
 
 export async function getDownloadSources() {
   return prisma.sourceAccount.findMany({ where: { posts: { some: { mediaAsset: { isNot: null } } } }, orderBy: { username: "asc" }, select: { username: true } });
 }
 
-export async function getPublished() {
-  return prisma.publishedPost.findMany({ orderBy: { publishedAt: "desc" }, include: { publishJob: { include: { sourcePost: true, mediaAsset: true, publisherIdentity: true } } } });
+export async function getPublished(page = 1) {
+  const pageSize = 24;
+  const current = Math.max(page, 1);
+  const [records, total] = await Promise.all([
+    prisma.publishedPost.findMany({ orderBy: { publishedAt: "desc" }, take: pageSize, skip: (current - 1) * pageSize, include: { publishJob: { include: { sourcePost: true, mediaAsset: true, publisherIdentity: true } } } }),
+    prisma.publishedPost.count(),
+  ]);
+  return { records, total, page: current, pageSize };
 }
 
-export async function getSettings() {
+export async function getRuntimeSettings() {
+  const [stored, identities] = await Promise.all([
+    new SettingsRepository(prisma).getAll(),
+    prisma.browserIdentity.findMany({ orderBy: [{ role: "asc" }, { createdAt: "asc" }], select: { id: true, role: true, label: true, expectedUsername: true, enabled: true, automaticEnabled: true, verifiedAt: true, verifiedUsername: true } }),
+  ]);
+  const config = applyStoredSettings(loadConfig(), stored);
+  return {
+    timezone: stored.APP_TIMEZONE ?? config.timezone,
+    publishMode: stored.PUBLISH_MODE ?? config.publishMode,
+    downloadBatchLimit: stored.DOWNLOAD_BATCH_LIMIT ?? String(config.downloadBatchLimit),
+    postsPerSource: stored.POSTS_PER_SOURCE ?? String(config.postsPerSource),
+    sourceAccountLimit: stored.SOURCE_ACCOUNT_LIMIT ?? String(config.sourceAccountLimit),
+    scheduleActiveWindows: config.scheduleActiveWindows,
+    scheduleJitterMinutes: stored.SCHEDULE_JITTER_MINUTES ?? String(config.scheduleJitterMinutes),
+    scheduleMinGapMinutes: stored.SCHEDULE_MIN_GAP_MINUTES ?? String(config.scheduleMinGapMinutes),
+    reviewVideoPreviewEnabled: stored.REVIEW_VIDEO_PREVIEW_ENABLED ?? "false",
+    identities: identities.map((identity) => ({ ...identity, verified: Boolean(identity.verifiedAt && identity.verifiedUsername && identity.verifiedUsername === identity.expectedUsername) })),
+  };
+}
+
+export async function getSettingsPage() {
   const [stored, collectorBrowserLock, publisherBrowserLock, installedBrowsers, identities] = await Promise.all([
     new SettingsRepository(prisma).getAll(),
     prisma.schedulerLock.findUnique({ where: { name: "x-collector-profile" } }),
@@ -87,8 +127,10 @@ export async function getSettings() {
   const config = applyStoredSettings(loadConfig(), stored);
   const collectorVerified = stored.COLLECTOR_BROWSER_SESSION_BINDING === browserBindingFingerprint(config, "collector");
   const publisherVerified = stored.PUBLISHER_BROWSER_SESSION_BINDING === browserBindingFingerprint(config, "publisher");
+  const identityLocks = await prisma.schedulerLock.findMany({ where: { name: { startsWith: "browser-profile:" } }, select: { name: true, lockedUntil: true } });
+  const lockByName = new Map(identityLocks.map((lock) => [lock.name, lock]));
   const identityCards = await Promise.all(identities.map(async (identity) => {
-    const lock = await prisma.schedulerLock.findUnique({ where: { name: `browser-profile:${identity.id}` } });
+    const lock = lockByName.get(`browser-profile:${identity.id}`);
     const profilePath = resolve(config.repositoryRoot, identity.profilePath);
     const managedRoot = resolve(config.repositoryRoot, "storage", "browser-profiles");
     const managedRelative = relative(managedRoot, profilePath);
@@ -164,37 +206,61 @@ export async function getResetPreview() {
   return { sources, posts, downloads, publishes, media, active: activeDownloads + activePublishes + activeCollections };
 }
 
-export async function getReviewQueue(source?: string, sort = "oldest") {
-  const username = source?.trim().toLowerCase();
-  const [jobs, duplicates] = await Promise.all([prisma.publishJob.findMany({
-    where: { status: { in: ["READY_FOR_REVIEW", "MANUAL_ATTENTION", "FAILED"] }, ...(username ? { sourcePost: { sourceAccount: { username } } } : {}) },
-    orderBy: { updatedAt: "asc" },
-    include: { sourcePost: { include: { sourceAccount: true, duplicateGroup: true } }, mediaAsset: true },
-  }), prisma.sourcePost.findMany({
-    where: { status: "SKIPPED", duplicateGroupId: { not: null }, publishJobs: { none: {} }, ...(username ? { sourceAccount: { username } } : {}) },
-    orderBy: { updatedAt: "asc" },
-    include: { sourceAccount: true, duplicateGroup: true, mediaAsset: true },
-  })]);
-  const tieBreak = (left: (typeof jobs)[number], right: (typeof jobs)[number]) => left.updatedAt.getTime() - right.updatedAt.getTime();
-  jobs.sort((left, right) => {
-    let difference = 0;
-    if (sort === "newest") difference = right.updatedAt.getTime() - left.updatedAt.getTime();
-    else if (sort === "post-newest") difference = right.sourcePost.postedAt.getTime() - left.sourcePost.postedAt.getTime();
-    else if (sort === "post-oldest") difference = left.sourcePost.postedAt.getTime() - right.sourcePost.postedAt.getTime();
-    else if (sort === "largest") difference = right.mediaAsset.fileSize - left.mediaAsset.fileSize;
-    else if (sort === "smallest") difference = left.mediaAsset.fileSize - right.mediaAsset.fileSize;
-    else if (sort === "longest") difference = right.mediaAsset.durationSeconds - left.mediaAsset.durationSeconds;
-    else if (sort === "shortest") difference = left.mediaAsset.durationSeconds - right.mediaAsset.durationSeconds;
-    else if (sort === "caption-longest") difference = Array.from(right.caption).length - Array.from(left.caption).length;
-    else if (sort === "caption-shortest") difference = Array.from(left.caption).length - Array.from(right.caption).length;
-    else if (sort === "source-az") difference = left.sourcePost.sourceAccount.username.localeCompare(right.sourcePost.sourceAccount.username);
-    else if (sort === "source-za") difference = right.sourcePost.sourceAccount.username.localeCompare(left.sourcePost.sourceAccount.username);
-    else difference = tieBreak(left, right);
-    return difference || tieBreak(left, right);
-  });
-  const sources = await prisma.sourceAccount.findMany({ where: { posts: { some: { OR: [{ publishJobs: { some: { status: { in: ["READY_FOR_REVIEW", "MANUAL_ATTENTION", "FAILED"] } } } }, { duplicateGroupId: { not: null }, status: "SKIPPED" }] } } }, orderBy: { username: "asc" }, select: { username: true } });
-  const publishers = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true }, orderBy: { label: "asc" }, select: { id: true, label: true, expectedUsername: true, verifiedAt: true, dailyPostLimit: true } });
-  return { jobs, duplicates, sources, publishers };
+const reviewStatuses = ["READY_FOR_REVIEW", "MANUAL_ATTENTION", "FAILED"];
+const reviewPageSize = 25;
+
+function reviewOrder(sort: string | undefined): Prisma.PublishJobOrderByWithRelationInput {
+  switch (sort) {
+    case "newest": return { updatedAt: "desc" as const };
+    case "post-newest": return { sourcePost: { postedAt: "desc" as const } };
+    case "post-oldest": return { sourcePost: { postedAt: "asc" as const } };
+    case "largest": return { mediaAsset: { fileSize: "desc" as const } };
+    case "smallest": return { mediaAsset: { fileSize: "asc" as const } };
+    case "longest": return { mediaAsset: { durationSeconds: "desc" as const } };
+    case "shortest": return { mediaAsset: { durationSeconds: "asc" as const } };
+    case "source-az": return { sourcePost: { sourceAccount: { username: "asc" as const } } };
+    case "source-za": return { sourcePost: { sourceAccount: { username: "desc" as const } } };
+    default: return { updatedAt: "asc" as const };
+  }
+}
+
+export async function getReviewQueue(options: { source?: string; sort?: string; page?: number } = {}) {
+  const username = options.source?.trim().toLowerCase();
+  const sort = options.sort;
+  const current = Math.max(options.page ?? 1, 1);
+  const skip = (current - 1) * reviewPageSize;
+  const where: Prisma.PublishJobWhereInput = { status: { in: reviewStatuses }, ...(username ? { sourcePost: { sourceAccount: { username } } } : {}) };
+  const include = { sourcePost: { include: { sourceAccount: true, duplicateGroup: true } }, mediaAsset: true } satisfies Prisma.PublishJobInclude;
+  type ReviewJob = Prisma.PublishJobGetPayload<{ include: typeof include }>;
+
+  let jobs: ReviewJob[] = [];
+  let total = 0;
+  if (sort === "caption-longest" || sort === "caption-shortest") {
+    const rows = await prisma.publishJob.findMany({ where, select: { id: true, caption: true } });
+    const direction = sort === "caption-longest" ? -1 : 1;
+    rows.sort((left, right) => direction * (Array.from(left.caption).length - Array.from(right.caption).length) || left.id.localeCompare(right.id));
+    const pageIds = rows.slice(skip, skip + reviewPageSize).map((row) => row.id);
+    const found = pageIds.length === 0 ? [] : await prisma.publishJob.findMany({ where: { id: { in: pageIds } }, include });
+    const byId = new Map(found.map((job) => [job.id, job]));
+    jobs = pageIds.map((id) => byId.get(id)).filter((job): job is ReviewJob => Boolean(job));
+    total = rows.length;
+  } else {
+    const [found, count] = await Promise.all([
+      prisma.publishJob.findMany({ where, orderBy: reviewOrder(sort), take: reviewPageSize, skip, include }),
+      prisma.publishJob.count({ where }),
+    ]);
+    jobs = found;
+    total = count;
+  }
+
+  const duplicateWhere = { status: "SKIPPED", duplicateGroupId: { not: null }, publishJobs: { none: {} }, ...(username ? { sourceAccount: { username } } : {}) };
+  const [duplicates, duplicateTotal, sources, publishers] = await Promise.all([
+    prisma.sourcePost.findMany({ where: duplicateWhere, orderBy: { updatedAt: "asc" }, take: 50, include: { sourceAccount: true, duplicateGroup: true, mediaAsset: true } }),
+    prisma.sourcePost.count({ where: duplicateWhere }),
+    prisma.sourceAccount.findMany({ where: { posts: { some: { OR: [{ publishJobs: { some: { status: { in: reviewStatuses } } } }, { duplicateGroupId: { not: null }, status: "SKIPPED" }] } } }, orderBy: { username: "asc" }, select: { username: true } }),
+    prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true }, orderBy: { label: "asc" }, select: { id: true, label: true, expectedUsername: true, verifiedAt: true, dailyPostLimit: true } }),
+  ]);
+  return { jobs, total, page: current, pageSize: reviewPageSize, duplicates, duplicateTotal, sources, publishers };
 }
 
 function levelName(value: unknown): string {
@@ -241,38 +307,30 @@ export type StorageUsage = {
   fileCount: number;
 };
 
-async function directorySize(directory: string): Promise<{ bytes: number; files: number }> {
+async function shallowSize(directory: string): Promise<{ bytes: number; files: number }> {
   try {
     const entries = await readdir(directory, { withFileTypes: true });
-    let bytes = 0;
-    let files = 0;
-    for (const entry of entries) {
-      const path = resolve(directory, entry.name);
-      if (entry.isDirectory()) {
-        const nested = await directorySize(path);
-        bytes += nested.bytes;
-        files += nested.files;
-      } else if (entry.isFile()) {
-        try { bytes += (await stat(path)).size; files += 1; } catch { /* skip */ }
-      }
-    }
-    return { bytes, files };
+    const files = entries.filter((entry) => entry.isFile());
+    const sizes = await Promise.all(files.map((entry) => stat(resolve(directory, entry.name)).then((metadata) => metadata.size).catch(() => 0)));
+    return { bytes: sizes.reduce((sum, size) => sum + size, 0), files: files.length };
   } catch { return { bytes: 0, files: 0 }; }
 }
 
 export async function getStorageUsage(): Promise<StorageUsage> {
   const config = loadConfig();
-  const roots = [config.videoStoragePath, config.thumbnailStoragePath, config.tempStoragePath, config.logStoragePath, config.backupStoragePath, resolve(config.repositoryRoot, "storage", "browser-profiles")];
-  let totalBytes = 0;
-  let videoBytes = 0;
-  let fileCount = 0;
-  for (const root of roots) {
-    const usage = await directorySize(root);
-    totalBytes += usage.bytes;
-    fileCount += usage.files;
-    if (root === config.videoStoragePath) videoBytes = usage.bytes;
-  }
-  return { totalBytes, videoBytes, fileCount };
+  const [video, thumbnails, temp, logs, backups] = await Promise.all([
+    prisma.mediaAsset.aggregate({ where: { localRemovedAt: null }, _sum: { fileSize: true }, _count: { _all: true } }),
+    shallowSize(config.thumbnailStoragePath),
+    shallowSize(config.tempStoragePath),
+    shallowSize(config.logStoragePath),
+    shallowSize(config.backupStoragePath),
+  ]);
+  const videoBytes = video._sum.fileSize ?? 0;
+  return {
+    totalBytes: videoBytes + thumbnails.bytes + temp.bytes + logs.bytes + backups.bytes,
+    videoBytes,
+    fileCount: video._count._all + thumbnails.files + temp.files + logs.files + backups.files,
+  };
 }
 
 export async function getVideoFiles(): Promise<VideoFileEntry[]> {
@@ -289,21 +347,18 @@ export async function getVideoFiles(): Promise<VideoFileEntry[]> {
   const results: VideoFileEntry[] = [];
   for (const name of mp4Files) {
     const platformPostId = name.slice(0, -4);
-    const fullPath = resolve(storage, name);
     const asset = assetMap.get(platformPostId);
     if (!asset) continue;
-    let fileSize: number;
-    try { fileSize = (await stat(fullPath)).size; } catch { continue; }
     const publication = asset.sourcePost.publishJobs.find((job) => job.publishedPost) ?? asset.sourcePost.publishJobs[0];
     const status = publication?.publishedPost ? "PUBLISHED" : publication?.status ?? asset.sourcePost.status;
     results.push({
       sourcePostId: asset.sourcePost.id,
       platformPostId,
       fileName: name,
-      fileSize,
+      fileSize: asset.fileSize,
       sourceUsername: asset.sourcePost.sourceAccount.username,
       sourceUrl: asset.sourcePost.sourceUrl,
-      caption: asset.sourcePost.text,
+      caption: asset.sourcePost.text ? asset.sourcePost.text.slice(0, 280) : asset.sourcePost.text,
       status,
       running: asset.sourcePost.downloadJob?.status === "RUNNING" || asset.sourcePost.publishJobs.some((job) => ["RUNNING", "PUBLISHING"].includes(job.status)) || asset.sourcePost.status === "PUBLISHING",
     });

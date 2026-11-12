@@ -7,6 +7,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cancelCollection, fetchPostPerformance } from "./actions";
 import type { PostMetrics } from "@cenblu/collector";
+import { useStatusPoll, type StatusCounts } from "./lib/status-store";
+import { formatNumber } from "./lib/format";
+
+export type NavItem = { label: string; href: string; count?: keyof StatusCounts };
 
 export function RefreshButton() {
   const router = useRouter();
@@ -17,6 +21,24 @@ export function RefreshButton() {
   });
 
   return <button className="refresh-button" type="button" onClick={refresh}>↻ Refresh <small>{refreshedAt ? refreshedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "manual"}</small></button>;
+}
+
+export function LiveRefresh() {
+  const router = useRouter();
+  const status = useStatusPoll();
+  const busy = status.collection?.active?.status === "RUNNING" || status.downloads?.run?.status === "RUNNING";
+  const previous = useRef<boolean | null>(null);
+
+  useEffect(() => {
+    if (previous.current === null) {
+      previous.current = busy;
+      return;
+    }
+    if (previous.current && !busy) router.refresh();
+    previous.current = busy;
+  }, [busy, router]);
+
+  return null;
 }
 
 export function ThemeToggle() {
@@ -37,9 +59,32 @@ export function ThemeToggle() {
   return <button className="theme-toggle" type="button" aria-pressed={dark} aria-label={`Switch to ${dark ? "light" : "dark"} mode`} onClick={toggleTheme}><span aria-hidden="true">{dark ? "☀" : "◐"}</span>{dark ? "Light" : "Dark"}</button>;
 }
 
-export function Navigation({ items }: { items: readonly (readonly [string, string])[] }) {
+export function Navigation({ groups }: { groups: readonly { label: string; items: readonly NavItem[] }[] }) {
   const pathname = usePathname();
-  return <nav aria-label="Main navigation">{items.map(([label, href]) => <Link key={href} href={href} aria-current={pathname === href ? "page" : undefined} className={pathname === href ? "active" : undefined}><span className="nav-dot" aria-hidden="true" />{label}</Link>)}</nav>;
+  const counts = useStatusPoll().counts;
+  return <nav aria-label="Main navigation">{groups.map((group) => <div className="side-group" key={group.label}><p className="side-label">{group.label}</p>{group.items.map((item) => {
+    const count = item.count ? counts?.[item.count] ?? 0 : 0;
+    return <Link key={item.href} href={item.href} aria-current={pathname === item.href ? "page" : undefined} className={pathname === item.href ? "active" : undefined}><span className="nav-dot" aria-hidden="true" />{item.label}{count > 0 && <span className="nav-count" title={`${count} pending`}>{count > 99 ? "99+" : count}</span>}</Link>;
+  })}</div>)}</nav>;
+}
+
+export function SelectionSummary({ formId, itemLabel = "items" }: { formId: string; itemLabel?: string }) {
+  const [state, setState] = useState({ selected: 0, total: 0 });
+  useEffect(() => {
+    const sync = () => {
+      const boxes = Array.from(document.querySelectorAll<HTMLInputElement>(`input[type="checkbox"][form="${formId}"]`));
+      setState({ selected: boxes.filter((box) => box.checked).length, total: boxes.length });
+    };
+    sync();
+    document.addEventListener("change", sync);
+    return () => document.removeEventListener("change", sync);
+  }, [formId]);
+  const allSelected = state.total > 0 && state.selected === state.total;
+  const toggleAll = () => {
+    document.querySelectorAll<HTMLInputElement>(`input[type="checkbox"][form="${formId}"]`).forEach((box) => { box.checked = !allSelected; });
+    setState({ selected: allSelected ? 0 : state.total, total: state.total });
+  };
+  return <><span className="selection-count">{state.selected} of {state.total} {itemLabel} selected</span><button className="small-button" type="button" onClick={toggleAll} disabled={state.total === 0}>{allSelected ? "Clear selection" : "Select all"}</button></>;
 }
 
 export function SubmitButton({ children, className = "small-button", pending = "Working…", ...props }: { children: React.ReactNode; className?: string; pending?: string } & Omit<React.ComponentPropsWithoutRef<"button">, "type">) {
@@ -57,20 +102,8 @@ export function ConfirmSubmitButton({ children, message, className = "small-butt
   </span>;
 }
 
-type CollectionRun = { id: string; status: string; totalSources: number; completedSources: number; failedSources: number; currentSource: string | null; lastError: string | null; cancelRequestedAt: string | null; targetNew: number; newFound: number; eligibleExamined: number; knownSkipped: number; inserted: number; collectorIdentity?: { label: string; expectedUsername: string | null } | null; sources: { status: string; targetNew: number; newFound: number; eligibleExamined: number; knownSkipped: number; sourceAccount: { username: string } }[] };
-type CollectionStatus = { active: CollectionRun | null; actives?: CollectionRun[]; latest: CollectionRun | null };
-
 export function CollectionProgress() {
-  const [status, setStatus] = useState<CollectionStatus | null>(null);
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try { const response = await fetch("/api/collection-status", { cache: "no-store" }); if (active) setStatus(await response.json()); } catch { /* The page remains usable if polling fails. */ }
-    };
-    void load();
-    const timer = window.setInterval(() => { void load(); }, 1_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
+  const status = useStatusPoll().collection;
   const run = status?.active ?? status?.latest;
   if (!run) return null;
   const percent = run.totalSources === 0 ? 0 : Math.round(run.completedSources / run.totalSources * 100);
@@ -83,22 +116,8 @@ export function CollectionProgress() {
   return null;
 }
 
-type DownloadStatus = {
-  run: { status: string; processed: number; limit: number } | null;
-  active: { id: string; sourcePost: { platformPostId: string; sourceAccount: { username: string } } }[];
-};
-
 export function DownloadProgress() {
-  const [status, setStatus] = useState<DownloadStatus | null>(null);
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try { const response = await fetch("/api/download-status", { cache: "no-store" }); if (active) setStatus(await response.json()); } catch { /* The queue remains usable if polling fails. */ }
-    };
-    void load();
-    const timer = window.setInterval(() => { void load(); }, 1_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
+  const status = useStatusPoll().downloads;
   if (!status?.run || status.run.status !== "RUNNING") return null;
   const percent = Math.min(100, Math.round(status.run.processed / Math.max(status.run.limit, 1) * 100));
   return <div className="collection-progress download-progress" role="status"><div><strong>Downloading {status.run.processed} / {status.run.limit}</strong><small>{status.active.length > 0 ? `${status.active.length} active` : "Preparing next download"}</small></div><div className="progress-track" role="progressbar" aria-label="Download progress" aria-valuemin={0} aria-valuemax={status.run.limit} aria-valuenow={status.run.processed}><span style={{ width: `${percent}%` }} /></div>{status.active.length > 0 && <small className="collection-totals">{status.active.map((job) => `@${job.sourcePost.sourceAccount.username} · ${job.sourcePost.platformPostId}`).join("  |  ")}</small>}</div>;
@@ -106,16 +125,7 @@ export function DownloadProgress() {
 
 export function CollectionButton({ children, className = "small-button accent-button" }: { children: React.ReactNode; className?: string }) {
   const { pending } = useFormStatus();
-  const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try { const response = await fetch("/api/collection-status", { cache: "no-store" }); const status: CollectionStatus = await response.json(); if (active) setBusy(status.active?.status === "RUNNING"); } catch { /* Preserve action availability on transient polling failures. */ }
-    };
-    void load();
-    const timer = window.setInterval(() => { void load(); }, 1_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, []);
+  const busy = useStatusPoll().collection?.active?.status === "RUNNING";
   return <button className={className} type="submit" disabled={pending || busy}>{pending ? "Collecting…" : busy ? "Browser busy" : children}</button>;
 }
 
@@ -125,11 +135,10 @@ export function ActionForm({ action, children, className, success, id }: { actio
 }
 
 export function PostPerformanceReport({ publishedPostId, result }: { publishedPostId: string; result?: { error?: string; metrics?: PostMetrics; fetchedAt?: string } }) {
-  const format = (value: number | null) => value === null ? "—" : new Intl.NumberFormat().format(value);
   return <div className="post-report">
     <form action={fetchPostPerformance}><input type="hidden" name="publishedPostId" value={publishedPostId} /><SubmitButton pending="Fetching…">{result?.metrics ? "Refresh performance" : "Fetch performance"}</SubmitButton></form>
     {result?.error && <div className="toast error" role="alert">{result.error}</div>}
-    {result?.metrics && <><dl className="mt-2 grid grid-cols-2 border border-line sm:grid-cols-5">{[["Replies", result.metrics.replies], ["Reposts", result.metrics.reposts], ["Likes", result.metrics.likes], ["Bookmarks", result.metrics.bookmarks], ["Views", result.metrics.views]].map(([label, value]) => <div className="min-w-0 border-b border-line p-2 text-center last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0" key={String(label)}><dt className="text-[9px] uppercase tracking-wide text-muted">{label}</dt><dd className="m-0 mt-1 [overflow-wrap:anywhere] text-sm font-bold text-ink">{format(value as number | null)}</dd></div>)}</dl><small className="mt-2 block text-muted">Fetched {result.fetchedAt ? new Date(result.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "now"} · not stored</small></>}
+    {result?.metrics && <><dl className="mt-2 grid grid-cols-2 border border-line sm:grid-cols-5">{[["Replies", result.metrics.replies], ["Reposts", result.metrics.reposts], ["Likes", result.metrics.likes], ["Bookmarks", result.metrics.bookmarks], ["Views", result.metrics.views]].map(([label, value]) => <div className="min-w-0 border-b border-line p-2 text-center last:border-b-0 sm:border-r sm:border-b-0 sm:last:border-r-0" key={String(label)}><dt className="text-[9px] uppercase tracking-wide text-muted">{label}</dt><dd className="m-0 mt-1 [overflow-wrap:anywhere] text-sm font-bold text-ink">{value === null ? "—" : formatNumber(value as number)}</dd></div>)}</dl><small className="mt-2 block text-muted">Fetched {result.fetchedAt ? new Date(result.fetchedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "now"} · not stored</small></>}
   </div>;
 }
 

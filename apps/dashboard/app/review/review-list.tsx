@@ -7,6 +7,7 @@ import { ConfirmSubmitButton, SubmitButton } from "../controls";
 import { Badge } from "../ui-primitives";
 import { ScheduleField } from "../schedule-field";
 import { ExpandableText } from "../expandable-text";
+import { formatMegabytes, formatSeconds } from "../lib/format";
 
 export type ReviewItem = {
   id: string;
@@ -53,9 +54,12 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
   const [compressing, setCompressing] = useState(false);
   const [previewVisible, setPreviewVisible] = useState(reviewers.previewEnabled);
   const [batchSelected, setBatchSelected] = useState<Record<string, boolean>>({});
+  const [caption, setCaption] = useState("");
   const dialogRef = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const selected = jobs.find((job) => job.id === selectedId);
+  const selectedCount = jobs.filter((job) => batchSelected[job.id]).length;
+  const allSelected = jobs.length > 0 && selectedCount === jobs.length;
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -65,6 +69,7 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
   }, [selected]);
 
   useEffect(() => setPreviewVisible(reviewers.previewEnabled), [reviewers.previewEnabled]);
+  useEffect(() => { setCaption(selected?.caption ?? ""); }, [selectedId, selected?.caption]);
 
   const close = () => {
     if (compressing) return;
@@ -72,10 +77,21 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
     setSelectedId(null);
   };
 
+  const toggleAll = () => {
+    const next = allSelected ? {} : Object.fromEntries(jobs.map((job) => [job.id, true]));
+    setBatchSelected(next);
+    document.querySelectorAll<HTMLInputElement>('input[type="checkbox"][form="bulk-review"]').forEach((box) => { box.checked = !allSelected; });
+  };
+
   return <>
+    <div className="selection-bar">
+      <span className="selection-count">{selectedCount} of {jobs.length} selected</span>
+      <label className="select-all"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={jobs.length === 0} /> Select all on this page</label>
+      <span className="selection-hint">Choose posts, then use Bulk actions above to approve, reject, return, or batch schedule them.</span>
+    </div>
     <div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,16rem),1fr))] gap-4">{jobs.map((job) => <article className="grid min-h-64 min-w-0 content-start gap-4 rounded-sm border border-line bg-surface p-5 text-ink" key={job.id}>
       <label className="flex items-center gap-2 text-xs text-muted"><input form="bulk-review" type="checkbox" name="publishJobId" value={job.id} onChange={(event) => setBatchSelected((prev) => ({ ...prev, [job.id]: event.target.checked }))} /><input hidden form="batch-schedule" type="checkbox" name="publishJobId" value={job.id} checked={Boolean(batchSelected[job.id])} onChange={() => {}} readOnly /><span>Select</span></label>
-      <dl className="m-0 grid grid-cols-2 border-y border-line"><div className="min-w-0 py-3"><dt className="text-[9px] font-semibold uppercase tracking-[.12em] text-muted">Size</dt><dd className="m-0 mt-1 break-words text-xl font-semibold">{(job.mediaAsset.fileSize / 1_000_000).toFixed(1)} MB</dd></div><div className="min-w-0 border-l border-line py-3 pl-3"><dt className="text-[9px] font-semibold uppercase tracking-[.12em] text-muted">Duration</dt><dd className="m-0 mt-1 break-words text-xl font-semibold">{job.mediaAsset.durationSeconds.toFixed(1)}s</dd></div></dl>
+      <dl className="m-0 grid grid-cols-2 border-y border-line"><div className="min-w-0 py-3"><dt className="text-[9px] font-semibold uppercase tracking-[.12em] text-muted">Size</dt><dd className="m-0 mt-1 break-words text-xl font-semibold">{formatMegabytes(job.mediaAsset.fileSize)}</dd></div><div className="min-w-0 border-l border-line py-3 pl-3"><dt className="text-[9px] font-semibold uppercase tracking-[.12em] text-muted">Duration</dt><dd className="m-0 mt-1 break-words text-xl font-semibold">{formatSeconds(job.mediaAsset.durationSeconds)}</dd></div></dl>
       <div className="min-w-0"><span className="text-[9px] font-semibold uppercase tracking-[.12em] text-muted">Caption</span><ExpandableText className="mt-1 text-[13px] leading-relaxed text-ink" lines={3}>{job.caption || "No caption"}</ExpandableText></div>
       <button className="small-button mt-auto justify-self-start" type="button" onClick={() => setSelectedId(job.id)}>Open review</button>
     </article>)}</div>
@@ -89,7 +105,7 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
               <video className="block w-full bg-black" controls preload="metadata" aria-label={`Video to review from @${selected.sourcePost.username}`} src={`/media/${selected.sourcePost.platformPostId}`} />
               <button className="small-button mt-2" type="button" onClick={() => setPreviewVisible(false)}>Hide video preview</button>
             </> : <button className="small-button" type="button" onClick={() => setPreviewVisible(true)}>Show video preview</button>}
-            <div className="flex flex-wrap items-center gap-2 py-3 text-xs text-muted"><Badge value={selected.status} /><span>{(selected.mediaAsset.fileSize / 1_000_000).toFixed(1)} MB</span><span>{selected.mediaAsset.durationSeconds.toFixed(1)}s</span><span>{selected.mediaAsset.width}x{selected.mediaAsset.height}</span></div>
+            <div className="flex flex-wrap items-center gap-2 py-3 text-xs text-muted"><Badge value={selected.status} /><span>{formatMegabytes(selected.mediaAsset.fileSize)}</span><span>{formatSeconds(selected.mediaAsset.durationSeconds)}</span><span>{selected.mediaAsset.width}x{selected.mediaAsset.height}</span></div>
             <a className="text-link" href={selected.sourcePost.sourceUrl} target="_blank" rel="noreferrer">Open original X post</a>
             <p className="form-note">Collected from {selected.sourcePost.discoveryKind === "BOOKMARK" ? "collector bookmarks" : "source profile"}.</p>
             <div className="mt-5 min-w-0 border-t border-line pt-4"><small className="text-[10px] uppercase tracking-wider text-muted">Source caption</small><p className="mt-2 whitespace-pre-wrap [overflow-wrap:anywhere]">{selected.sourcePost.text || "No source caption"}</p></div>
@@ -97,10 +113,10 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
           <section className="min-w-0">
             <form action={saveReview} className="grid min-w-0 gap-5">
               <input type="hidden" name="publishJobId" value={selected.id} />
-              <label className="grid gap-2 text-xs font-semibold text-muted">Caption<textarea className="min-h-32 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="caption" defaultValue={selected.caption} maxLength={280} required disabled={compressing} /></label>
+              <label className="caption-field text-xs font-semibold text-muted">Caption<textarea className="min-h-32 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="caption" value={caption} onChange={(event) => setCaption(event.target.value)} maxLength={280} required disabled={compressing} /><span className="caption-meta"><span>{caption.length > 270 ? "Near the 280 character limit" : "Draft caption"}</span><span className={caption.length >= 280 ? "over-limit" : ""}>{caption.length}/280</span></span></label>
               <label className="grid gap-2 text-xs font-semibold text-muted">Internal notes<textarea className="min-h-24 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="reviewNotes" defaultValue={selected.sourcePost.reviewNotes ?? ""} maxLength={2000} disabled={compressing} /></label>
               <label className="grid gap-2 text-xs font-semibold text-muted">Tags<input className="w-full rounded-sm border border-line bg-surface px-3 py-2 text-sm text-ink" name="internalTags" defaultValue={selected.sourcePost.internalTags ?? ""} maxLength={500} disabled={compressing} /></label>
-              <fieldset className="publisher-targets"><legend>Publish to</legend>{publishers.map((publisher) => <label key={publisher.id}><input type="checkbox" name="publisherIdentityId" value={publisher.id} disabled={compressing} /><span>{publisher.label} (@{publisher.expectedUsername}){publisher.verifiedAt ? "" : " · needs verification"}{publisher.dailyPostLimit == null ? <span className="publisher-tier-badge premium">Premium</span> : <span className="publisher-tier-badge free">Free · {publisher.dailyPostLimit}/day</span>}</span></label>)}</fieldset>
+              <fieldset className="publisher-targets"><legend>Publish to</legend>{publishers.map((publisher) => <label key={publisher.id}><input type="checkbox" name="publisherIdentityId" value={publisher.id} disabled={compressing} /><span>{publisher.label}{publisher.expectedUsername ? ` (@${publisher.expectedUsername})` : ""}{publisher.verifiedAt ? "" : " · needs verification"}{publisher.dailyPostLimit == null ? <span className="publisher-tier-badge premium">Premium</span> : <span className="publisher-tier-badge free">Free · {publisher.dailyPostLimit}/day</span>}</span></label>)}</fieldset>
               <div><span className="mb-2 block text-xs font-semibold text-muted">Schedule (optional)</span><ScheduleField value={selected.scheduledFor} timeZone={timeZone} optional /></div>
               <ReviewSaveButtons locked={compressing} />
             </form>

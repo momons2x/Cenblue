@@ -6,9 +6,22 @@ set "URL=http://127.0.0.1:3000"
 set "FOLDER=%~dp0"
 if "%FOLDER:~-1%"=="\" set "FOLDER=%FOLDER:~0,-1%"
 
-rem Pass --no-editor to skip launching VS Code (used by the logon shortcut).
+rem Flags: --no-editor skips VS Code, --prod serves the production build,
+rem --rebuild forces a fresh production build (implies --prod).
 set "OPEN_EDITOR=1"
+set "PROD_MODE=0"
+set "REBUILD=0"
+:parse
+if "%~1"=="" goto :parsed
 if /i "%~1"=="--no-editor" set "OPEN_EDITOR=0"
+if /i "%~1"=="--prod" set "PROD_MODE=1"
+if /i "%~1"=="--rebuild" (
+  set "PROD_MODE=1"
+  set "REBUILD=1"
+)
+shift
+goto :parse
+:parsed
 
 rem Already serving? Open the editor and get out without starting a second one.
 curl -sf -o nul "%URL%/api/health" >nul 2>&1
@@ -21,10 +34,31 @@ if not errorlevel 1 (
 rem Open the editor first. Its dev-server task may bring the server up instead of us.
 if "%OPEN_EDITOR%"=="1" call :open_editor
 
+if "%PROD_MODE%"=="1" call :run_prod
+
 echo Starting Cenblue server on %URL%
 echo Press Ctrl+C in this window to stop it, or double-click stop-server.bat.
 title Cenblue server
-pnpm dev
+call pnpm dev
+echo.
+echo Cenblue server stopped.
+exit /b 0
+
+:run_prod
+if "%REBUILD%"=="1" goto :build
+if exist "apps\dashboard\.next\BUILD_ID" goto :serve
+:build
+echo Building Cenblue for production...
+call pnpm build
+if errorlevel 1 (
+  echo Production build failed. Server not started.
+  exit /b 1
+)
+:serve
+echo Starting Cenblue production server on %URL%
+echo Press Ctrl+C in this window to stop it, or double-click stop-server.bat.
+title Cenblue server (production)
+call pnpm start
 echo.
 echo Cenblue server stopped.
 exit /b 0

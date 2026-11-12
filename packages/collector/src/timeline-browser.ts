@@ -367,9 +367,26 @@ export class PlaywrightTimelineBrowser implements TimelineBrowser {
       if (idleRounds >= this.idleScrolls) { stopReason = "timeline_exhausted"; break; }
       if (count > 0) await articles.last().scrollIntoViewIfNeeded().catch(() => undefined);
       await page.mouse.wheel(0, 1_800);
-      await page.waitForTimeout(this.scrollDelayMs);
+      await this.settleScroll(page, count);
       scrolls += 1;
     }
     return { scrolls, stopReason };
+  }
+
+  private async settleScroll(page: Page, previousCount: number): Promise<void> {
+    const startedAt = Date.now();
+    const deadline = startedAt + this.scrollDelayMs;
+    let grown = false;
+    while (Date.now() < deadline) {
+      await page.waitForTimeout(100);
+      if (!grown) {
+        const current = await page.locator(xSelectors.timelinePost).count().catch(() => previousCount);
+        grown = current > previousCount;
+      }
+      if (grown && Date.now() - startedAt >= 400) {
+        await page.waitForTimeout(150);
+        return;
+      }
+    }
   }
 }

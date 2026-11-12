@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { removeMedia } from "../actions";
 import { ActionForm, ConfirmSubmitButton } from "../controls";
 import type { VideoFileEntry } from "../lib/data";
+import { formatMegabytes } from "../lib/format";
 import { Badge } from "../ui-primitives";
 
 function drawUnique(files: VideoFileEntry[], count: number): VideoFileEntry[] {
@@ -25,7 +26,7 @@ function VideoCard({ file, number, watched, onWatched }: { file: VideoFileEntry;
       <video controls preload="none" aria-label={`Video ${file.platformPostId}`} src={`/media/${file.platformPostId}`} onEnded={onWatched} />
     </div>
     <div className="video-card-copy">
-      <div><strong>{file.sourceUsername ? `@${file.sourceUsername}` : file.platformPostId}</strong><span>{(file.fileSize / 1_000_000).toFixed(1)} MB</span></div>
+      <div><strong>{file.sourceUsername ? `@${file.sourceUsername}` : file.platformPostId}</strong><span>{formatMegabytes(file.fileSize)}</span></div>
       {file.caption && <p>{file.caption}</p>}
       {file.sourceUrl && <a href={file.sourceUrl} target="_blank" rel="noreferrer">Original post ↗</a>}
       <div className="video-card-actions"><Badge value={file.status} />{!file.running && <ActionForm action={removeMedia}><input type="hidden" name="sourcePostId" value={file.sourcePostId} /><input type="hidden" name="returnPath" value="/videos" /><ConfirmSubmitButton message={`Permanently delete the local video and thumbnail for X post ${file.platformPostId}?${file.status === "PUBLISHED" ? " The publication record and X link will be kept." : " The source post will remain tracked."}`} pendingLabel="Deleting…">Delete local media</ConfirmSubmitButton></ActionForm>}</div>

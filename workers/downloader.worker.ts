@@ -18,7 +18,7 @@ async function main(): Promise<void> {
       const leaseMs = Math.max(config.workerLockTimeoutMinutes, 10) * 60_000;
       const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), leaseMs, leaseMs);
       return { profilePath: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.collectorBrowserId, runExclusive: (operation: () => Promise<void>) => lease.run(operation) };
-    }),
+    }, config.downloadConcurrentFragments),
     new FfprobeService(runner, config.ffprobeBinary),
     new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath),
     logger,

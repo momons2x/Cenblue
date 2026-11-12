@@ -57,6 +57,7 @@ const environmentSchema = z.object({
   COLLECTION_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(59).default(15),
   PUBLISH_INTERVAL_MINUTES: z.coerce.number().int().min(1).default(60),
   DOWNLOAD_CONCURRENCY: z.coerce.number().int().min(1).max(3).default(1),
+  DOWNLOAD_CONCURRENT_FRAGMENTS: z.coerce.number().int().min(1).max(8).default(4),
   DOWNLOAD_BATCH_LIMIT: z.coerce.number().int().min(1).max(1_000).default(20),
   WORKER_LOCK_TIMEOUT_MINUTES: z.coerce.number().int().min(1).default(30),
   COLLECTOR_MAX_SCROLLS: z.coerce.number().int().min(1).max(200).default(60),
@@ -109,6 +110,7 @@ export type AppConfig = {
   collectionIntervalMinutes: number;
   publishIntervalMinutes: number;
   downloadConcurrency: number;
+  downloadConcurrentFragments: number;
   downloadBatchLimit: number;
   workerLockTimeoutMinutes: number;
   collectorMaxScrolls: number;
@@ -205,6 +207,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     collectionIntervalMinutes: parsed.COLLECTION_INTERVAL_MINUTES,
     publishIntervalMinutes: parsed.PUBLISH_INTERVAL_MINUTES,
     downloadConcurrency: parsed.DOWNLOAD_CONCURRENCY,
+    downloadConcurrentFragments: parsed.DOWNLOAD_CONCURRENT_FRAGMENTS,
     downloadBatchLimit: parsed.DOWNLOAD_BATCH_LIMIT,
     workerLockTimeoutMinutes: parsed.WORKER_LOCK_TIMEOUT_MINUTES,
     collectorMaxScrolls: parsed.COLLECTOR_MAX_SCROLLS,

@@ -107,6 +107,8 @@ model MediaAsset {
   updatedAt       DateTime   @updatedAt
   sourcePost      SourcePost @relation(fields: [sourcePostId], references: [id], onDelete: Cascade)
   publishJobs     PublishJob[]
+
+  @@index([createdAt])
 }
 
 model PublishJob {
@@ -135,6 +137,7 @@ model PublishJob {
   @@index([status, scheduledFor, nextAttemptAt])
   @@index([status, heartbeatAt])
   @@index([publisherIdentityId, status, scheduledFor])
+  @@index([status, updatedAt])
   @@unique([sourcePostId, publisherIdentityId])
   @@unique([mediaAssetId, publisherIdentityId])
 }
@@ -189,6 +192,8 @@ model PublishedPost {
   publishedAt    DateTime
   createdAt      DateTime   @default(now())
   publishJob     PublishJob @relation(fields: [publishJobId], references: [id], onDelete: Cascade)
+
+  @@index([publishedAt])
 }
 
 model SchedulerLock {
