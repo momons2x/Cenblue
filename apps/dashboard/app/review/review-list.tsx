@@ -4,7 +4,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { approveReview, compressReviewVideo, rejectReview, resolveReviewCaption, returnToDownloads, saveReview } from "../actions";
 import { ConfirmSubmitButton, SubmitButton } from "../controls";
-import { Badge } from "../ui-primitives";
+import { Badge, Empty } from "../ui-primitives";
 import { ScheduleField } from "../schedule-field";
 import { ExpandableText } from "../expandable-text";
 import { formatMegabytes, formatSeconds } from "../lib/format";
@@ -116,7 +116,7 @@ export function ReviewList({ jobs, timeZone, publishers, reviewers }: { jobs: Re
               <label className="caption-field text-xs font-semibold text-muted">Caption<textarea className="min-h-32 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="caption" value={caption} onChange={(event) => setCaption(event.target.value)} maxLength={280} required disabled={compressing} /><span className="caption-meta"><span>{caption.length > 270 ? "Near the 280 character limit" : "Draft caption"}</span><span className={caption.length >= 280 ? "over-limit" : ""}>{caption.length}/280</span></span></label>
               <label className="grid gap-2 text-xs font-semibold text-muted">Internal notes<textarea className="min-h-24 w-full resize-y rounded-sm border border-line bg-surface p-3 text-sm text-ink" name="reviewNotes" defaultValue={selected.sourcePost.reviewNotes ?? ""} maxLength={2000} disabled={compressing} /></label>
               <label className="grid gap-2 text-xs font-semibold text-muted">Tags<input className="w-full rounded-sm border border-line bg-surface px-3 py-2 text-sm text-ink" name="internalTags" defaultValue={selected.sourcePost.internalTags ?? ""} maxLength={500} disabled={compressing} /></label>
-              <fieldset className="publisher-targets"><legend>Publish to</legend>{publishers.map((publisher) => <label key={publisher.id}><input type="checkbox" name="publisherIdentityId" value={publisher.id} disabled={compressing} /><span>{publisher.label}{publisher.expectedUsername ? ` (@${publisher.expectedUsername})` : ""}{publisher.verifiedAt ? "" : " · needs verification"}{publisher.dailyPostLimit == null ? <span className="publisher-tier-badge premium">Premium</span> : <span className="publisher-tier-badge free">Free · {publisher.dailyPostLimit}/day</span>}</span></label>)}</fieldset>
+              {publishers.length === 0 ? <Empty>No Publisher identities yet. Add one under Settings before approving.</Empty> : <fieldset className="publisher-targets"><legend>Publish to</legend>{publishers.map((publisher) => <label key={publisher.id}><input type="checkbox" name="publisherIdentityId" value={publisher.id} disabled={compressing} /><span>{publisher.label}{publisher.expectedUsername ? ` (@${publisher.expectedUsername})` : ""}{publisher.verifiedAt ? "" : " · needs verification"}{publisher.dailyPostLimit == null ? <span className="publisher-tier-badge premium">Premium</span> : <span className="publisher-tier-badge free">Free · {publisher.dailyPostLimit}/day</span>}</span></label>)}</fieldset>}
               <div><span className="mb-2 block text-xs font-semibold text-muted">Schedule (optional)</span><ScheduleField value={selected.scheduledFor} timeZone={timeZone} optional /></div>
               <ReviewSaveButtons locked={compressing} />
             </form>

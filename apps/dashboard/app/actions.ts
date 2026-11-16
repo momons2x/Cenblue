@@ -120,7 +120,7 @@ async function collectSources(sourceIds?: string[]): Promise<{ busy: boolean }> 
   const identityMap = new Map(identities.map((identity) => [identity.id, identity]));
   const grouped = new Map<string, typeof sources>();
   for (const source of sources) {
-    const identityId = source.collectorIdentityId ?? "legacy-collector";
+    const identityId = source.collectorIdentityId ?? "";
     grouped.set(identityId, [...(grouped.get(identityId) ?? []), source]);
   }
   let busy = false;
@@ -128,12 +128,13 @@ async function collectSources(sourceIds?: string[]): Promise<{ busy: boolean }> 
   for (let index = 0; index < groups.length; index += 2) {
     const batch = groups.slice(index, index + 2);
     const results = await Promise.all(batch.map(async ([identityId, identitySources]) => {
-      const identity = identityMap.get(identityId);
+      const identity = identityId ? identityMap.get(identityId) : undefined;
       const runs = new CollectionRunRepository(prisma);
       if (!identity) {
+        const message = identityId ? "The assigned Collector identity no longer exists. Reassign these sources to a verified Collector." : "This source has no Collector assigned. Assign one under Sources → Manage source.";
         const run = await runs.start(identitySources.map((source) => ({ id: source.id, targetNew: Math.min(source.collectLimit, config.postsPerSource) })));
-        await runs.finish(run.id, "FAILED", "The assigned Collector identity no longer exists. Reassign these sources to a verified Collector.");
-        for (const source of identitySources) await runs.finishSource(run.id, source.id, { failed: true, cancelled: false, inserted: 0, error: "The assigned Collector identity no longer exists." });
+        await runs.finish(run.id, "FAILED", message);
+        for (const source of identitySources) await runs.finishSource(run.id, source.id, { failed: true, cancelled: false, inserted: 0, error: message });
         return false;
       }
       if (!identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername) {
