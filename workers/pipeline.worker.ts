@@ -44,16 +44,24 @@ async function main(): Promise<void> {
         discordOwnerId: config.discordOwnerId,
       }, async (identityId) => (await prisma.browserIdentity.findUnique({ where: { id: identityId }, select: { label: true } }))?.label ?? null);
       const identities = await prisma.browserIdentity.findMany({ where: { role: "PUBLISHER", enabled: true, automaticEnabled: true, verifiedAt: { not: null } }, orderBy: { createdAt: "asc" } });
+      let published = false;
       for (const identity of identities) {
         if (!identity.expectedUsername || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) continue;
-        const [jobId] = await publishRepository.findDueScheduledIds(new Date(), 1, identity.id);
-        if (!jobId) continue;
+        const jobIds = await publishRepository.findDueScheduledIds(new Date(), 10, identity.id);
+        if (jobIds.length === 0) continue;
         const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
         const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
         const publisher = new PublishService(publishRepository, new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, lease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername }, logger), new LocalPublishMediaVerifier(config.videoStoragePath), logger, config.publishAllowEmptyCaption, 3, identity.id, notifier?.onPublishFailure, notifier?.onPublishSuccess);
-        return publisher.processJob(jobId);
+        for (const jobId of jobIds) {
+          try {
+            await publisher.processJob(jobId);
+            published = true;
+          } catch (error) {
+            logger.warn({ operation: "pipeline.publish.job.skipped", jobId, publisherIdentityId: identity.id, error: error instanceof Error ? error.message : String(error) }, "Scheduled publish job could not be processed");
+          }
+        }
       }
-      return false;
+      return published;
     },
   }, logger, config.publishIntervalMinutes, config.workerLockTimeoutMinutes * 60_000, (source) => resolveCaption(source, config.captionTemplates));
 

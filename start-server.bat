@@ -34,19 +34,24 @@ if not errorlevel 1 (
 rem Open the editor first. Its dev-server task may bring the server up instead of us.
 if "%OPEN_EDITOR%"=="1" call :open_editor
 
-if "%PROD_MODE%"=="1" call :run_prod
+if "%PROD_MODE%"=="1" set "CENBLU_PROD=1"
 
-echo Starting Cenblue server on %URL%
-echo Press Ctrl+C in this window to stop it, or double-click stop-server.bat.
-title Cenblue server
-call pnpm dev
+if "%PROD_MODE%"=="1" (
+  call :ensure_build
+  if errorlevel 1 exit /b 1
+)
+
+echo Starting Cenblue (dashboard + pipeline) on %URL%
+echo Press Ctrl+C in this window to stop both, or double-click stop-server.bat.
+title Cenblue (dashboard + pipeline)
+call pnpm start:all
 echo.
-echo Cenblue server stopped.
+echo Cenblue stopped.
 exit /b 0
 
-:run_prod
+:ensure_build
 if "%REBUILD%"=="1" goto :build
-if exist "apps\dashboard\.next\BUILD_ID" goto :serve
+if exist "apps\dashboard\.next\BUILD_ID" exit /b 0
 :build
 echo Building Cenblue for production...
 call pnpm build
@@ -54,13 +59,6 @@ if errorlevel 1 (
   echo Production build failed. Server not started.
   exit /b 1
 )
-:serve
-echo Starting Cenblue production server on %URL%
-echo Press Ctrl+C in this window to stop it, or double-click stop-server.bat.
-title Cenblue server (production)
-call pnpm start
-echo.
-echo Cenblue server stopped.
 exit /b 0
 
 :open_editor

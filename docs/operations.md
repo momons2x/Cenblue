@@ -2,7 +2,7 @@
 
 ## Recommended Topology
 
-Run the dashboard for operator access and its scheduled publisher. Use one recurring pipeline owner only; avoid running the dashboard automatic publisher and `pnpm pipeline` as competing long-lived schedulers.
+Run the dashboard for operator access and the pipeline for recurring collection, download, and automatic publishing. `start-server.bat` supervises both. The pipeline is the only recurring scheduler and publisher owner; the dashboard never auto-publishes on its own.
 
 Keep `PUBLISH_MODE=ASSISTED` until the publisher session, captions, review flow, and scheduled behavior have been verified.
 

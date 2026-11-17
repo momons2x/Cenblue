@@ -4,8 +4,7 @@ import pino from "pino";
 import type { Locator } from "playwright";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, PublishRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
-import { calculateUploadTimeoutMs, captionsMatch, classifyBrowserLaunchError, cloneEdgeProfile, extractCaptionNames, isPointerInterceptionError, keyboardFallbackAllowed, LocalPublishMediaVerifier, persistentContextOptions, publishButtonReady, PublisherError, PublishService, resolveCaption, resolveFranchise, selectVisiblePublishButton, validateCaption, type CaptionSource, type Publisher } from "@cenblu/publisher";
-import { automaticPublishingEnabled } from "../apps/dashboard/app/lib/automatic-publisher";
+import { automaticPublishingEnabled, calculateUploadTimeoutMs, captionsMatch, classifyBrowserLaunchError, cloneEdgeProfile, extractCaptionNames, isPointerInterceptionError, keyboardFallbackAllowed, LocalPublishMediaVerifier, persistentContextOptions, publishButtonReady, PublisherError, PublishService, resolveCaption, resolveFranchise, selectVisiblePublishButton, validateCaption, type CaptionSource, type Publisher } from "@cenblu/publisher";
 
 const logger = pino({ level: "silent" });
 const videos = resolve("storage/temp/publisher-test/videos");

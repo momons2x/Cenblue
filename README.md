@@ -171,7 +171,7 @@ Session cookies are local-only. This repository does not include the owner's bro
 pnpm dev
 ```
 
-`start-server.bat` is the everyday launcher: it starts the dashboard and opens VS Code, or `start-server.bat --no-editor` skips the editor. Pass `--prod` to serve the compiled production build instead of the dev server. The first production start builds automatically when needed, and `--rebuild` forces a fresh build after code changes:
+`start-server.bat` is the everyday launcher: it supervises the dashboard and the pipeline worker together in one window (one button starts both, `stop-server.bat` stops both), and opens VS Code, or `start-server.bat --no-editor` skips the editor. Pass `--prod` to serve the compiled production build instead of the dev server. The first production start builds automatically when needed, and `--rebuild` forces a fresh build after code changes:
 
 ```powershell
 .\start-server.bat --prod --no-editor
@@ -197,6 +197,8 @@ The **Overview** page shows live status for the CLI workers (collector, download
 
 Download batches run in the background: **Process pending now** on the Queue, per-job **Download now**, and bulk retry-downloads start the work in the dashboard process and return immediately, so navigation stays responsive while media downloads. A live progress bar follows you on every page until the batch finishes, and the Queue acknowledges the run with a status toast. Only one run can be active at a time; pressing the action again while a run is live shows the ongoing progress instead of starting a second batch.
 
+Collection works the same way: **Collect all**, selected-source collection, and per-source **Collect** validate and start the run in the dashboard process, then return immediately while collection continues in the background. The Overview and Queue follow the live run through `/api/status`, and a second Collect press while a run is active is ignored instead of queueing a duplicate.
+
 ## Scheduled Publishing
 
 Automatic scheduled publishing requires all of the following:
@@ -204,13 +206,13 @@ Automatic scheduled publishing requires all of the following:
 - Effective `PUBLISH_MODE=AUTOMATIC` in dashboard settings.
 - At least one enabled Publisher identity that is verified from the dashboard and enabled for automatic publishing.
 - An approved job with a non-null schedule at or before the current time.
-- The dashboard running continuously.
+- The pipeline running continuously (started automatically by `start-server.bat`).
 - A closed, authenticated, account-matched, and available target Publisher profile.
 - Valid local media and caption data.
 
 New Publisher identities start with automatic publishing enabled, but remain inactive until they are verified from the dashboard. If a due job cannot auto-publish, the Queue shows an amber warning row naming the blocking condition, such as Publish mode not being Automatic, an unassigned, paused, not-automatic, unverified, or deleted Publisher identity, or a retry that is not yet due.
 
-The dashboard checks due jobs every 30 seconds. Future jobs remain untouched. Do not run the recurring dashboard publisher and `pnpm pipeline` as competing scheduler owners unless you understand the lease behavior.
+The pipeline checks due jobs every cycle, processing up to 10 due jobs per Publisher. Future jobs remain untouched. The dashboard never auto-publishes on its own; the recurring pipeline is the single scheduler and publisher owner.
 
 All schedule controls use the configured `APP_TIMEZONE` with native date and time inputs. Approval without a date is manual-only and requires the Queue's explicit **Publish now** action; automatic workers process only due jobs with a schedule.
 
@@ -348,7 +350,7 @@ Prefer PATH-based values (`yt-dlp`, `ffmpeg`, `ffprobe`) in `.env` so future too
 
 | Directory | Responsibility |
 | --- | --- |
-| `apps/dashboard` | Next.js dashboard, Server Actions, APIs, automatic publisher loop, and `/api/health` |
+| `apps/dashboard` | Next.js dashboard, Server Actions, APIs, notification dispatcher, Discord bot, and `/api/health` |
 | `workers` | Collector, downloader, publisher, pipeline, maintenance, setup, migration, notify, and discord-bot CLIs |
 | `packages/config` | Environment validation and protected path resolution |
 | `packages/database` | Prisma repositories, leases, settings, and SQLite migrations |

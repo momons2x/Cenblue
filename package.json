@@ -30,6 +30,7 @@
     "setup": "tsx workers/setup.worker.ts",
     "build": "pnpm --filter @cenblu/dashboard build",
     "start": "pnpm --filter @cenblu/dashboard start",
+    "start:all": "tsx workers/supervisor.ts",
     "lint": "eslint apps packages workers tests vitest.config.ts",
     "typecheck": "tsc --noEmit && pnpm --filter @cenblu/dashboard typecheck",
     "test": "cross-env DATABASE_URL=file:../../../storage/temp/cenblu-test.db prisma migrate deploy --schema packages/database/prisma/schema.prisma && cross-env DATABASE_URL=file:../../../storage/temp/cenblu-test.db vitest run",

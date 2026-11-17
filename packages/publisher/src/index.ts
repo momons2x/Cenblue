@@ -4,6 +4,7 @@ export { FRANCHISES, resolveFranchise, type Franchise } from "./franchise-map";
 export { LocalPublishMediaVerifier, type PublishMediaVerifier } from "./media-verifier";
 export { calculateUploadTimeoutMs, captionsMatch, classifyBrowserLaunchError, isPointerInterceptionError, keyboardFallbackAllowed, persistentContextOptions, publishButtonReady, selectVisiblePublishButton, XPlaywrightPublisher, type PlaywrightPublisherOptions, type PublishButtonState } from "./playwright-publisher";
 export { PublishService } from "./publish-service";
+export { automaticPublishingEnabled } from "./publish-mode";
 export { browserName, discoverInstalledChromiumBrowsers, openChromiumProfile, validateChromiumExecutable, type BrowserInstallation } from "./browser-installations";
 export { assertEdgeClosed, cloneEdgeProfile, openEdgeProfile } from "./profile-clone";
 export { PublisherError, type Publisher, type PublisherFailure, type PublishInput, type PublishPhase, type PublishResult } from "./types";
