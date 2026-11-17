@@ -33,26 +33,28 @@ export class NotificationEmitter {
   ) {}
 
   async emitPublishFailure(context: PublishFailureContext, settings: NotificationSettings, now = new Date()): Promise<boolean> {
-    if (!settings.enabled) return false;
     const recipients = Object.entries(settings.channels).filter((entry): entry is [NotificationChannel, string] => Boolean(entry[1]));
-    if (recipients.length === 0) return false;
     const dedupeKey = `publish-failure:${context.jobId}`;
-    if (await this.events.hasRecentDedupe(dedupeKey, now)) return false;
+    const alreadySeen = await this.events.hasRecentDedupe(dedupeKey, now);
     const severity = context.manualAttention ? "CRITICAL" : "ERROR";
     const label = context.publisherIdentityId
       ? (await this.resolvePublisherLabel?.(context.publisherIdentityId)) ?? "unknown publisher"
       : "unassigned publisher";
     const attention = context.manualAttention ? "\nManual review required before retrying." : context.retryable ? "\nAutomatic retry will be scheduled." : "\nNot retrying automatically.";
     const message = `Publication failed for X post ${context.platformPostId} (${label}, attempt ${context.attemptCount}).\n${context.error}${attention}`;
-    await this.events.insert({
-      type: "publish.failed",
-      severity,
-      component: "publisher",
-      message,
-      meta: JSON.stringify({ jobId: context.jobId, platformPostId: context.platformPostId }),
-      dedupeKey,
-      dedupeUntil: new Date(now.getTime() + this.dedupeWindowMs),
-    });
+    if (!alreadySeen) {
+      await this.events.insert({
+        type: "publish.failed",
+        severity,
+        component: "publisher",
+        message,
+        meta: JSON.stringify({ jobId: context.jobId, platformPostId: context.platformPostId }),
+        operationId: context.jobId,
+        dedupeKey,
+        dedupeUntil: new Date(now.getTime() + this.dedupeWindowMs),
+      });
+    }
+    if (!settings.enabled || recipients.length === 0 || alreadySeen) return false;
     for (const [channel, recipient] of recipients) {
       await this.outbox.enqueue({ channel, recipient, text: message }, now);
     }
@@ -60,25 +62,27 @@ export class NotificationEmitter {
   }
 
   async emitPublishedPost(context: PublishedPostContext, settings: NotificationSettings, now = new Date()): Promise<boolean> {
-    if (!settings.enabled) return false;
     const recipients = Object.entries(settings.channels).filter((entry): entry is [NotificationChannel, string] => Boolean(entry[1]));
-    if (recipients.length === 0) return false;
     const dedupeKey = `publish-success:${context.jobId}`;
-    if (await this.events.hasRecentDedupe(dedupeKey, now)) return false;
+    const alreadySeen = await this.events.hasRecentDedupe(dedupeKey, now);
     const label = context.publisherIdentityId
       ? (await this.resolvePublisherLabel?.(context.publisherIdentityId)) ?? "unknown publisher"
       : "unassigned publisher";
     const link = context.platformUrl ? `\n${context.platformUrl}` : "";
     const message = `Published X post ${context.platformPostId} via ${label}.${link}\nPlease confirm it posted — the local media will be deleted once you confirm it on the Published page.`;
-    await this.events.insert({
-      type: "publish.success",
-      severity: "INFO",
-      component: "publisher",
-      message,
-      meta: JSON.stringify({ jobId: context.jobId, platformPostId: context.platformPostId }),
-      dedupeKey,
-      dedupeUntil: new Date(now.getTime() + this.dedupeWindowMs),
-    });
+    if (!alreadySeen) {
+      await this.events.insert({
+        type: "publish.success",
+        severity: "INFO",
+        component: "publisher",
+        message,
+        meta: JSON.stringify({ jobId: context.jobId, platformPostId: context.platformPostId }),
+        operationId: context.jobId,
+        dedupeKey,
+        dedupeUntil: new Date(now.getTime() + this.dedupeWindowMs),
+      });
+    }
+    if (!settings.enabled || recipients.length === 0 || alreadySeen) return false;
     for (const [channel, recipient] of recipients) {
       await this.outbox.enqueue({ channel, recipient, text: message }, now);
     }

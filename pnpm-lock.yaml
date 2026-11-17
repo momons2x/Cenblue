@@ -140,6 +140,9 @@ importers:
       '@cenblu/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
+      '@cenblu/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
       '@js-temporal/polyfill':
         specifier: 0.5.1
         version: 0.5.1

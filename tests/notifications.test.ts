@@ -72,16 +72,18 @@ describe("notification emitter", () => {
     }, { enabled: true, channels: { discord: "123" } });
     expect(emitted).toBe(true);
     expect(await prisma.operationalEvent.count()).toBe(1);
+    const event = await prisma.operationalEvent.findFirstOrThrow();
+    expect(event.operationId).toBe("job-1");
     expect(await outbox.countPending()).toBe(1);
   });
 
-  it("does nothing when disabled or missing recipients", async () => {
+  it("records events but sends nothing when disabled or missing recipients", async () => {
     const events = new OperationalEventRepository(prisma);
     const outbox = new NotificationOutboxRepository(prisma);
     const emitter = new NotificationEmitter(events, outbox);
     await emitter.emitPublishFailure({ jobId: "job-2", platformPostId: "90002", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: false, retryable: false }, { enabled: false, channels: { discord: "123" } });
     await emitter.emitPublishFailure({ jobId: "job-3", platformPostId: "90003", publisherIdentityId: null, error: "x", attemptCount: 1, manualAttention: false, retryable: false }, { enabled: true, channels: {} });
-    expect(await prisma.operationalEvent.count()).toBe(0);
+    expect(await prisma.operationalEvent.count()).toBe(2);
     expect(await outbox.countPending()).toBe(0);
   });
 
@@ -143,12 +145,12 @@ describe("notification emitter", () => {
     expect(await outbox.countPending()).toBe(1);
   });
 
-  it("does nothing for a published-post notification when disabled", async () => {
+  it("records an event but sends nothing for a published-post notification when disabled", async () => {
     const events = new OperationalEventRepository(prisma);
     const outbox = new NotificationOutboxRepository(prisma);
     const emitter = new NotificationEmitter(events, outbox);
     expect(await emitter.emitPublishedPost({ jobId: "job-9", platformPostId: "90009", publisherIdentityId: null, platformUrl: null }, { enabled: false, channels: { discord: "123" } })).toBe(false);
-    expect(await prisma.operationalEvent.count()).toBe(0);
+    expect(await prisma.operationalEvent.count()).toBe(1);
     expect(await outbox.countPending()).toBe(0);
   });
 });

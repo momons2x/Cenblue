@@ -211,12 +211,14 @@ model OperationalEvent {
   component   String
   message     String
   meta        String?
+  operationId String?
   dedupeKey   String?
   dedupeUntil DateTime?
   createdAt   DateTime  @default(now())
 
   @@index([severity, createdAt])
   @@index([dedupeKey])
+  @@index([operationId, createdAt])
 }
 
 model NotificationOutbox {

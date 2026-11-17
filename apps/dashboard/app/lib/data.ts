@@ -2,7 +2,7 @@ import "server-only";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { extname, relative, resolve } from "node:path";
 import { applyStoredSettings, browserBindingFingerprint, loadConfig } from "@cenblu/config";
-import { NotificationOutboxRepository, prisma, SettingsRepository, type Prisma } from "@cenblu/database";
+import { NotificationOutboxRepository, OperationalEventRepository, prisma, SettingsRepository, type Prisma } from "@cenblu/database";
 import { getActiveDiscordClient } from "@cenblu/discord-bot";
 import { browserName, discoverInstalledChromiumBrowsers } from "@cenblu/publisher";
 
@@ -297,6 +297,11 @@ export async function getLogs(filters: { level?: string; component?: string } = 
     }
     return { entries: entries.slice(-250).reverse(), images, components: [...new Set(entries.map((entry) => entry.component))].sort() };
   } catch { return { entries: [], images: [], components: [] }; }
+}
+
+export async function getOperationalEvents(filters: { level?: string; component?: string } = {}, limit = 50) {
+  const events = await new OperationalEventRepository(prisma).listRecent(limit);
+  return events.filter((event) => (!filters.level || filters.level === event.severity) && (!filters.component || filters.component === event.component));
 }
 
 export type VideoFileEntry = { sourcePostId: string; platformPostId: string; fileName: string; fileSize: number; sourceUsername: string | null; sourceUrl: string | null; caption: string | null; status: string; running: boolean };

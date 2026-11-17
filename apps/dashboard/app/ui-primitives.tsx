@@ -1,6 +1,6 @@
 export function Badge({ value }: { value: string | null | undefined }) {
   const toneByStatus: Record<string, string> = {
-    FAILED: "danger", MANUAL_ATTENTION: "danger", REJECTED: "danger", ERROR: "danger", CANCELLED: "neutral",
+    FAILED: "danger", MANUAL_ATTENTION: "danger", REJECTED: "danger", ERROR: "danger", CANCELLED: "neutral", BLOCKED: "danger", SESSION_EXPIRED: "danger",
     PENDING: "warn", RETRY_WAIT: "warn", RUNNING: "warn", DOWNLOADING: "warn", PUBLISHING: "warn", READY_FOR_REVIEW: "warn", APPROVED: "warn", WARN: "warn", NEEDS_VERIFY: "warn",
     COMPLETED: "good", DOWNLOADED: "good", PUBLISHED: "good", ENABLED: "good", AVAILABLE: "good", VERIFIED: "good",
     DELETED: "danger", NOT_CREATED: "neutral",

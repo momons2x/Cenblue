@@ -6,6 +6,7 @@ import type { BrowserId } from "@cenblu/config";
 import type { CollectionOptions, SourceAccountInput } from "@cenblu/shared";
 import { pruneDiagnosticFiles } from "@cenblu/shared/diagnostics";
 import type { ExclusiveLease } from "@cenblu/shared/lease";
+import { AppError } from "@cenblu/shared/errors";
 import { detectXUsername } from "@cenblu/shared/x-identity";
 import type { RawTimelinePost } from "./normalize";
 import { normalizeBookmarkedPost, normalizeTimelinePost } from "./normalize";
@@ -142,11 +143,11 @@ export class PlaywrightTimelineBrowser implements TimelineBrowser {
     ]).catch(() => undefined);
     const intervention = page.getByText(/verify your identity|your account is locked|account suspended|unusual activity|complete (the )?captcha|security challenge/i).first();
     const label = this.profileRole === "collector" ? "Collector" : "Publisher";
-    if (await intervention.isVisible().catch(() => false)) throw new Error(`${label} X account requires manual intervention`);
-    if (!await accountMenu.isVisible().catch(() => false)) throw new Error(`${label} browser profile is not logged in to X`);
+    if (await intervention.isVisible().catch(() => false)) throw new AppError("SESSION_EXPIRED", { userMessage: `${label} X account needs manual attention. Open the profile from Settings and complete the X check, then try again.` });
+    if (!await accountMenu.isVisible().catch(() => false)) throw new AppError("SESSION_EXPIRED", { userMessage: `${label} browser profile is not signed in to X. Open the profile from Settings, sign in, then try again.` });
     const activeUsername = await detectXUsername(page, xSelectors.accountMenuButton, navigateToProfile);
     if (this.options.expectedUsername) {
-      if (!activeUsername || activeUsername !== this.options.expectedUsername.toLowerCase()) throw new Error(`${label} identity mismatch. Expected @${this.options.expectedUsername}.`);
+      if (!activeUsername || activeUsername !== this.options.expectedUsername.toLowerCase()) throw new AppError("SESSION_EXPIRED", { userMessage: `${label} profile is signed in to a different X account. Expected @${this.options.expectedUsername}. Open the profile from Settings and sign in with the right account.` });
     }
     return activeUsername;
   }

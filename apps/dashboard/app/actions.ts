@@ -17,6 +17,7 @@ import { buildBatchSchedule } from "@cenblu/scheduler";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
 import { discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChromiumProfile, PublishService, resolveCaption, validateCaption, validateChromiumExecutable, XPlaywrightPublisher } from "@cenblu/publisher";
 import { combineExclusiveLeases, ResourceBusyError } from "@cenblu/shared/lease";
+import { toUserMessage, userError } from "@cenblu/shared/errors";
 import pino from "pino";
 import { scheduleFromFields } from "./lib/schedule";
 import { triggerPendingDownloads } from "./lib/download-runner";
@@ -37,6 +38,14 @@ function redirectWithNotice(path: string, message: string, tone: "success" | "er
   redirect(`${base}?${query.toString()}`);
 }
 
+function redirectWithErrorNotice(path: string, error: unknown): never {
+  if (error && typeof error === "object" && "digest" in error) {
+    const digest = String((error as { digest: unknown }).digest);
+    if (digest.startsWith("NEXT_REDIRECT") || digest.startsWith("NEXT_NOT_FOUND")) throw error;
+  }
+  redirectWithNotice(path, toUserMessage(error), "error");
+}
+
 function inside(root: string, path: string): boolean {
   const value = relative(resolve(root), resolve(path));
   return value !== "" && !value.startsWith("..") && !value.includes(":");
@@ -51,14 +60,18 @@ function validImageSignature(type: keyof typeof manualImageTypes, bytes: Uint8Ar
 }
 
 export async function addSource(formData: FormData) {
-  const parsed = username.safeParse(formData.get("username"));
-  if (!parsed.success) throw new Error("Enter a valid X username without @.");
-  const collectorIdentityId = id.parse(formData.get("collectorIdentityId"));
-  const collector = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR", enabled: true } });
-  if (!collector) throw new Error("Choose an enabled Collector identity.");
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  await new SourceAccountRepository(prisma, config.sourceAccountLimit).create({ username: parsed.data, collectLimit: limit.parse(formData.get("collectLimit") ?? 5), collectorIdentityId });
-  refresh("/", "/sources");
+  try {
+    const parsed = username.safeParse(formData.get("username"));
+    if (!parsed.success) throw userError("Enter a valid X username without @.");
+    const collectorIdentityId = id.parse(formData.get("collectorIdentityId"));
+    const collector = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR", enabled: true } });
+    if (!collector) throw userError("Choose an enabled Collector identity.");
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    await new SourceAccountRepository(prisma, config.sourceAccountLimit).create({ username: parsed.data, collectLimit: limit.parse(formData.get("collectLimit") ?? 5), collectorIdentityId });
+    refresh("/", "/sources");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function toggleSource(formData: FormData) {
@@ -111,19 +124,31 @@ export async function resetAllData(formData: FormData) {
 }
 
 export async function collectSource(formData: FormData) {
-  await triggerCollection([id.parse(formData.get("sourceId"))]);
-  refresh("/", "/sources", "/queue");
+  try {
+    await triggerCollection([id.parse(formData.get("sourceId"))]);
+    refresh("/", "/sources", "/queue");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function collectAllSources() {
-  await triggerCollection();
-  refresh("/", "/sources", "/queue");
+  try {
+    await triggerCollection();
+    refresh("/", "/sources", "/queue");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function collectSelectedSources(formData: FormData) {
-  const sourceIds = z.array(id).min(1, "Select at least one enabled source.").parse(formData.getAll("sourceId"));
-  await triggerCollection(sourceIds);
-  refresh("/", "/sources", "/queue");
+  try {
+    const sourceIds = z.array(id).min(1, "Select at least one enabled source.").parse(formData.getAll("sourceId"));
+    await triggerCollection(sourceIds);
+    refresh("/", "/sources", "/queue");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function collectBookmarks(formData: FormData) {
@@ -133,7 +158,7 @@ export async function collectBookmarks(formData: FormData) {
     const collectorIdentityId = id.parse(formData.get("collectorIdentityId"));
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
     const identity = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR", enabled: true } });
-    if (!identity || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername) throw new Error("Choose a verified Collector identity.");
+    if (!identity || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername) throw userError("Choose a verified Collector identity.", "IDENTITY_UNVERIFIED");
     const logger = pino({ level: "silent" });
     const repository = new SourcePostRepository(prisma);
     const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
@@ -159,8 +184,7 @@ export async function collectBookmarks(formData: FormData) {
     query.set("bookmarkDuplicates", String(result.duplicates));
     refresh("/", "/sources", "/queue", "/downloads");
   } catch (error) {
-    const message = error instanceof ResourceBusyError ? "The collector browser is busy. Wait for collection to finish." : error instanceof Error ? error.message : "Bookmark collection failed.";
-    query.set("bookmarkError", message);
+    query.set("bookmarkError", toUserMessage(error));
   }
   redirect(`/sources?${query}`);
 }
@@ -171,13 +195,17 @@ export async function cancelCollection(formData: FormData) {
 }
 
 export async function schedulePublish(formData: FormData) {
-  const publishJobId = id.parse(formData.get("publishJobId"));
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const scheduledFor = scheduleFromFields(formData, config.timezone, false);
-  if (!scheduledFor) throw new Error("Choose a schedule date.");
-  if (scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
-  await new PublishRepository(prisma).reschedule(publishJobId, scheduledFor);
-  refresh("/", "/queue");
+  try {
+    const publishJobId = id.parse(formData.get("publishJobId"));
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const scheduledFor = scheduleFromFields(formData, config.timezone, false);
+    if (!scheduledFor) throw userError("Choose a schedule date.");
+    if (scheduledFor <= new Date()) throw userError("Choose a future schedule time.");
+    await new PublishRepository(prisma).reschedule(publishJobId, scheduledFor);
+    refresh("/", "/queue");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 export async function saveReview(formData: FormData) {
@@ -192,64 +220,72 @@ export async function saveReview(formData: FormData) {
 }
 
 export async function compressReviewVideo(formData: FormData) {
-  const publishJobId = id.parse(formData.get("publishJobId"));
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, include: { sourcePost: true, mediaAsset: true } });
-  if (!["READY_FOR_REVIEW", "MANUAL_ATTENTION", "FAILED"].includes(job.status)) throw new Error("Only videos awaiting review can be compressed.");
-  if (job.mediaAsset.localRemovedAt) throw new Error("The local video is unavailable.");
-  if (!inside(config.videoStoragePath, job.mediaAsset.filePath)) throw new Error("Media path is outside configured video storage.");
-  if (basename(job.mediaAsset.filePath).includes(".compressed-")) throw new Error("This review video has already been compressed.");
-
-  const runner = new NodeProcessRunner();
-  const token = randomUUID();
-  const temporaryPath = resolve(config.tempStoragePath, `${job.sourcePost.platformPostId}.${token}.compress.part.mp4`);
-  const finalPath = resolve(config.videoStoragePath, `${job.sourcePost.platformPostId}.compressed-${token}.mp4`);
-  if (!inside(config.tempStoragePath, temporaryPath) || !inside(config.videoStoragePath, finalPath)) throw new Error("Invalid compression output path.");
-
-  await Promise.all([mkdir(config.tempStoragePath, { recursive: true }), mkdir(config.videoStoragePath, { recursive: true })]);
-  let moved = false;
-  let databaseUpdated = false;
-  let originalSize = 0;
-  let compressedSize = 0;
   try {
-    originalSize = (await stat(job.mediaAsset.filePath)).size;
-    await new FfmpegVideoCompressor(runner, config.ffmpegBinary).compress(job.mediaAsset.filePath, temporaryPath);
-    const files = new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath);
-    compressedSize = await files.fileSize(temporaryPath);
-    if (compressedSize >= originalSize) {
-      await rm(temporaryPath, { force: true });
-      return redirect("/review?compression=not-smaller");
+    const publishJobId = id.parse(formData.get("publishJobId"));
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, include: { sourcePost: true, mediaAsset: true } });
+    if (!["READY_FOR_REVIEW", "MANUAL_ATTENTION", "FAILED"].includes(job.status)) throw userError("Only videos awaiting review can be compressed.");
+    if (job.mediaAsset.localRemovedAt) throw userError("The local video is unavailable.", "MEDIA_MISSING");
+    if (!inside(config.videoStoragePath, job.mediaAsset.filePath)) throw userError("Media path is outside configured video storage.");
+    if (basename(job.mediaAsset.filePath).includes(".compressed-")) throw userError("This review video has already been compressed.");
+
+    const runner = new NodeProcessRunner();
+    const token = randomUUID();
+    const temporaryPath = resolve(config.tempStoragePath, `${job.sourcePost.platformPostId}.${token}.compress.part.mp4`);
+    const finalPath = resolve(config.videoStoragePath, `${job.sourcePost.platformPostId}.compressed-${token}.mp4`);
+    if (!inside(config.tempStoragePath, temporaryPath) || !inside(config.videoStoragePath, finalPath)) throw userError("Invalid compression output path.");
+
+    await Promise.all([mkdir(config.tempStoragePath, { recursive: true }), mkdir(config.videoStoragePath, { recursive: true })]);
+    let moved = false;
+    let databaseUpdated = false;
+    let originalSize = 0;
+    let compressedSize = 0;
+    try {
+      originalSize = (await stat(job.mediaAsset.filePath)).size;
+      await new FfmpegVideoCompressor(runner, config.ffmpegBinary).compress(job.mediaAsset.filePath, temporaryPath);
+      const files = new MediaFiles(config.videoStoragePath, config.tempStoragePath, config.thumbnailStoragePath);
+      compressedSize = await files.fileSize(temporaryPath);
+      if (compressedSize >= originalSize) {
+        await rm(temporaryPath, { force: true });
+        return redirect("/review?compression=not-smaller");
+      }
+      const probe = new FfprobeService(runner, config.ffprobeBinary);
+      const metadata = await probe.inspect(temporaryPath);
+      const checksum = await files.checksum(temporaryPath);
+      const perceptualHash = await new FfmpegPerceptualVideoHasher(runner, config.ffmpegBinary).hash(temporaryPath);
+      await rename(temporaryPath, finalPath);
+      moved = true;
+      const updated = await prisma.mediaAsset.updateMany({
+        where: { id: job.mediaAsset.id, filePath: job.mediaAsset.filePath, localRemovedAt: null },
+        data: { filePath: finalPath, fileSize: compressedSize, ...metadata, checksum, perceptualHash },
+      });
+      if (updated.count !== 1) throw userError("The video changed while compression was running. Try again.", "STALE_STATE");
+      databaseUpdated = true;
+      await rm(job.mediaAsset.filePath, { force: true }).catch(() => undefined);
+    } catch (error) {
+      if (!databaseUpdated) await rm(moved ? finalPath : temporaryPath, { force: true });
+      throw error;
     }
-    const probe = new FfprobeService(runner, config.ffprobeBinary);
-    const metadata = await probe.inspect(temporaryPath);
-    const checksum = await files.checksum(temporaryPath);
-    const perceptualHash = await new FfmpegPerceptualVideoHasher(runner, config.ffmpegBinary).hash(temporaryPath);
-    await rename(temporaryPath, finalPath);
-    moved = true;
-    const updated = await prisma.mediaAsset.updateMany({
-      where: { id: job.mediaAsset.id, filePath: job.mediaAsset.filePath, localRemovedAt: null },
-      data: { filePath: finalPath, fileSize: compressedSize, ...metadata, checksum, perceptualHash },
-    });
-    if (updated.count !== 1) throw new Error("The video changed while compression was running. Try again.");
-    databaseUpdated = true;
-    await rm(job.mediaAsset.filePath, { force: true }).catch(() => undefined);
+    refresh("/review", "/downloads", "/videos", "/queue");
+    redirect(`/review?compression=saved&before=${originalSize}&after=${compressedSize}`);
   } catch (error) {
-    if (!databaseUpdated) await rm(moved ? finalPath : temporaryPath, { force: true });
-    throw error;
+    redirectWithErrorNotice("/review", error);
   }
-  refresh("/review", "/downloads", "/videos", "/queue");
-  redirect(`/review?compression=saved&before=${originalSize}&after=${compressedSize}`);
 }
 
 export async function approveReview(formData: FormData) {
-  const publishJobId = id.parse(formData.get("publishJobId"));
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const scheduledFor = scheduleFromFields(formData, config.timezone, true);
-  if (scheduledFor && scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
-  const caption = z.string().max(280).parse(formData.get("caption"));
-  const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
-  await new PublishRepository(prisma).approveTargets(publishJobId, publisherIdentityIds, scheduledFor, caption, { notes: z.string().max(2_000).parse(formData.get("reviewNotes") ?? ""), tags: z.string().max(500).parse(formData.get("internalTags") ?? "") });
-  refresh("/review", "/queue", "/");
+  try {
+    const publishJobId = id.parse(formData.get("publishJobId"));
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const scheduledFor = scheduleFromFields(formData, config.timezone, true);
+    if (scheduledFor && scheduledFor <= new Date()) throw userError("Choose a future schedule time.");
+    const caption = z.string().max(280).parse(formData.get("caption"));
+    const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
+    await new PublishRepository(prisma).approveTargets(publishJobId, publisherIdentityIds, scheduledFor, caption, { notes: z.string().max(2_000).parse(formData.get("reviewNotes") ?? ""), tags: z.string().max(500).parse(formData.get("internalTags") ?? "") });
+    refresh("/review", "/queue", "/");
+  } catch (error) {
+    redirectWithErrorNotice("/review", error);
+  }
 }
 
 export async function resolveReviewCaption(formData: FormData) {
@@ -271,67 +307,75 @@ export async function rejectReview(formData: FormData) {
 }
 
 export async function bulkReview(formData: FormData) {
-  const jobIds = z.array(id).min(1, "Select at least one review item.").parse(formData.getAll("publishJobId"));
-  const decision = z.enum(["approve", "reject", "downloads"]).parse(formData.get("decision"));
-  const repository = new PublishRepository(prisma);
-  if (decision === "approve") {
-    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-    const scheduledFor = scheduleFromFields(formData, config.timezone, true);
-    if (scheduledFor && scheduledFor <= new Date()) throw new Error("Choose a future schedule time.");
-    const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
-    for (const jobId of jobIds) {
-      const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: jobId } });
-      await repository.approveTargets(jobId, publisherIdentityIds, scheduledFor, job.caption);
+  try {
+    const jobIds = z.array(id).min(1, "Select at least one review item.").parse(formData.getAll("publishJobId"));
+    const decision = z.enum(["approve", "reject", "downloads"]).parse(formData.get("decision"));
+    const repository = new PublishRepository(prisma);
+    if (decision === "approve") {
+      const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+      const scheduledFor = scheduleFromFields(formData, config.timezone, true);
+      if (scheduledFor && scheduledFor <= new Date()) throw userError("Choose a future schedule time.");
+      const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
+      for (const jobId of jobIds) {
+        const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: jobId } });
+        await repository.approveTargets(jobId, publisherIdentityIds, scheduledFor, job.caption);
+      }
+    } else if (decision === "reject") {
+      for (const jobId of jobIds) await repository.reject(jobId);
+    } else {
+      for (const jobId of jobIds) await repository.returnToDownloads(jobId);
     }
-  } else if (decision === "reject") {
-    for (const jobId of jobIds) await repository.reject(jobId);
-  } else {
-    for (const jobId of jobIds) await repository.returnToDownloads(jobId);
+    refresh("/review", "/queue", "/");
+  } catch (error) {
+    redirectWithErrorNotice("/review", error);
   }
-  refresh("/review", "/queue", "/");
 }
 
 export async function scheduleBatchReview(formData: FormData) {
-  const jobIds = z.array(id).min(1, "Select at least one review item.").parse(formData.getAll("publishJobId"));
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const jobs = await prisma.publishJob.findMany({ where: { id: { in: jobIds } }, select: { id: true, sourcePost: { select: { postedAt: true } } } });
-  if (jobs.length !== jobIds.length) throw new Error("One or more selected review items no longer exist.");
-  const rawDay = String(formData.get("scheduleDay") ?? "").trim();
-  const targetDay = rawDay || new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(new Date());
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDay)) throw new Error("Choose a valid schedule day.");
-  const rawCount = String(formData.get("postsPerDay") ?? "").trim();
-  const countOverride = rawCount === "" ? undefined : z.coerce.number().int().min(1).max(50).parse(rawCount);
-  const rawNumberOfDays = String(formData.get("numberOfDays") ?? "").trim();
-  const numberOfDays = rawNumberOfDays === "" ? undefined : z.coerce.number().int().min(1).max(30).parse(rawNumberOfDays);
-  const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
-  const publishers = await prisma.browserIdentity.findMany({ where: { id: { in: publisherIdentityIds }, role: "PUBLISHER", enabled: true } });
-  if (publishers.length !== new Set(publisherIdentityIds).size) throw new Error("One or more selected Publisher identities are unavailable.");
+  try {
+    const jobIds = z.array(id).min(1, "Select at least one review item.").parse(formData.getAll("publishJobId"));
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const jobs = await prisma.publishJob.findMany({ where: { id: { in: jobIds } }, select: { id: true, sourcePost: { select: { postedAt: true } } } });
+    if (jobs.length !== jobIds.length) throw userError("One or more selected review items no longer exist.", "NOT_FOUND");
+    const rawDay = String(formData.get("scheduleDay") ?? "").trim();
+    const targetDay = rawDay || new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(new Date());
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(targetDay)) throw userError("Choose a valid schedule day.");
+    const rawCount = String(formData.get("postsPerDay") ?? "").trim();
+    const countOverride = rawCount === "" ? undefined : z.coerce.number().int().min(1).max(50).parse(rawCount);
+    const rawNumberOfDays = String(formData.get("numberOfDays") ?? "").trim();
+    const numberOfDays = rawNumberOfDays === "" ? undefined : z.coerce.number().int().min(1).max(30).parse(rawNumberOfDays);
+    const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
+    const publishers = await prisma.browserIdentity.findMany({ where: { id: { in: publisherIdentityIds }, role: "PUBLISHER", enabled: true } });
+    if (publishers.length !== new Set(publisherIdentityIds).size) throw userError("One or more selected Publisher identities are unavailable.", "IDENTITY_REQUIRED");
 
-  const repository = new PublishRepository(prisma);
-  const allScheduled: Array<{ jobId: string; scheduledFor: Date }> = [];
-  for (const publisherId of publisherIdentityIds) {
-    const schedule = buildBatchSchedule({
-      jobs: jobs.map((job) => ({ id: job.id })),
-      timeZone: config.timezone,
-      activeWindows: config.scheduleActiveWindows,
-      jitterMinutes: config.scheduleJitterMinutes,
-      minGapMinutes: config.scheduleMinGapMinutes,
-      postsPerDay: countOverride,
-      numberOfDays,
-      targetDay,
-    });
-    allScheduled.push(...schedule);
-    for (const entry of schedule) {
-      const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: entry.jobId } });
-      await repository.approveTargets(entry.jobId, [publisherId], entry.scheduledFor, job.caption);
+    const repository = new PublishRepository(prisma);
+    const allScheduled: Array<{ jobId: string; scheduledFor: Date }> = [];
+    for (const publisherId of publisherIdentityIds) {
+      const schedule = buildBatchSchedule({
+        jobs: jobs.map((job) => ({ id: job.id })),
+        timeZone: config.timezone,
+        activeWindows: config.scheduleActiveWindows,
+        jitterMinutes: config.scheduleJitterMinutes,
+        minGapMinutes: config.scheduleMinGapMinutes,
+        postsPerDay: countOverride,
+        numberOfDays,
+        targetDay,
+      });
+      allScheduled.push(...schedule);
+      for (const entry of schedule) {
+        const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: entry.jobId } });
+        await repository.approveTargets(entry.jobId, [publisherId], entry.scheduledFor, job.caption);
+      }
     }
+    refresh("/review", "/queue", "/");
+    const first = allScheduled[0]?.scheduledFor;
+    const last = allScheduled[allScheduled.length - 1]?.scheduledFor;
+    const intervalMinutes = allScheduled.length > 1 && first && last ? Math.round((last.getTime() - first.getTime()) / (allScheduled.length - 1) / 60_000) : 0;
+    const formatDay = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(date);
+    redirect(`/review?batchScheduled=${allScheduled.length}&batchDay=${formatDay(first ?? new Date())}&batchEndDay=${last ? formatDay(last) : formatDay(first ?? new Date())}&batchInterval=${intervalMinutes}&batchFirst=${first ? first.toISOString() : ""}`);
+  } catch (error) {
+    redirectWithErrorNotice("/review", error);
   }
-  refresh("/review", "/queue", "/");
-  const first = allScheduled[0]?.scheduledFor;
-  const last = allScheduled[allScheduled.length - 1]?.scheduledFor;
-  const intervalMinutes = allScheduled.length > 1 && first && last ? Math.round((last.getTime() - first.getTime()) / (allScheduled.length - 1) / 60_000) : 0;
-  const formatDay = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: config.timezone }).format(date);
-  redirect(`/review?batchScheduled=${allScheduled.length}&batchDay=${formatDay(first ?? new Date())}&batchEndDay=${last ? formatDay(last) : formatDay(first ?? new Date())}&batchInterval=${intervalMinutes}&batchFirst=${first ? first.toISOString() : ""}`);
 }
 
 
@@ -348,34 +392,46 @@ export async function restoreDuplicate(formData: FormData) {
 }
 
 export async function retryJob(formData: FormData) {
-  const jobId = id.parse(formData.get("jobId"));
-  const jobType = z.enum(["download", "publish"]).parse(formData.get("jobType"));
-  if (jobType === "download") await new DownloadRepository(prisma).requestNow(jobId);
-  else await new PublishRepository(prisma).retry(jobId);
-  refresh("/", "/queue", "/downloads");
+  try {
+    const jobId = id.parse(formData.get("jobId"));
+    const jobType = z.enum(["download", "publish"]).parse(formData.get("jobType"));
+    if (jobType === "download") await new DownloadRepository(prisma).requestNow(jobId);
+    else await new PublishRepository(prisma).retry(jobId);
+    refresh("/", "/queue", "/downloads");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 export async function cancelJob(formData: FormData) {
-  const jobId = id.parse(formData.get("jobId"));
-  const jobType = z.enum(["download", "publish"]).parse(formData.get("jobType"));
-  if (jobType === "download") await new DownloadRepository(prisma).cancel(jobId);
-  else await new PublishRepository(prisma).cancel(jobId);
-  refresh("/", "/queue", "/downloads");
+  try {
+    const jobId = id.parse(formData.get("jobId"));
+    const jobType = z.enum(["download", "publish"]).parse(formData.get("jobType"));
+    if (jobType === "download") await new DownloadRepository(prisma).cancel(jobId);
+    else await new PublishRepository(prisma).cancel(jobId);
+    refresh("/", "/queue", "/downloads");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 export async function changeJobStatus(formData: FormData) {
-  const jobId = id.parse(formData.get("jobId"));
-  const jobType = z.enum(["download", "publish"]).parse(formData.get("jobType"));
-  if (jobType === "download") {
-    const status = z.enum(["PENDING", "CANCELLED"]).parse(formData.get("status"));
-    const repository = new DownloadRepository(prisma);
-    if (status === "PENDING") await repository.requestNow(jobId);
-    else await repository.cancel(jobId);
-  } else {
-    const status = z.enum(["READY_FOR_REVIEW", "APPROVED", "REJECTED"]).parse(formData.get("status"));
-    await new PublishRepository(prisma).setOperatorStatus(jobId, status);
+  try {
+    const jobId = id.parse(formData.get("jobId"));
+    const jobType = z.enum(["download", "publish"]).parse(formData.get("jobType"));
+    if (jobType === "download") {
+      const status = z.enum(["PENDING", "CANCELLED"]).parse(formData.get("status"));
+      const repository = new DownloadRepository(prisma);
+      if (status === "PENDING") await repository.requestNow(jobId);
+      else await repository.cancel(jobId);
+    } else {
+      const status = z.enum(["READY_FOR_REVIEW", "APPROVED", "REJECTED"]).parse(formData.get("status"));
+      await new PublishRepository(prisma).setOperatorStatus(jobId, status);
+    }
+    refresh("/", "/review", "/queue", "/downloads");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
   }
-  refresh("/", "/review", "/queue", "/downloads");
 }
 
 export async function resolveManualAttention(formData: FormData) {
@@ -387,20 +443,19 @@ export async function recoverIncorrectPublishedPost(formData: FormData) {
   try {
     const publishJobId = id.parse(formData.get("publishJobId"));
     const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, include: { mediaAsset: true } });
-    if (job.mediaAsset.localRemovedAt) throw new Error("A publication cannot return to Review after its local media has been removed.");
+    if (job.mediaAsset.localRemovedAt) throw userError("A publication cannot return to Review after its local media has been removed.", "MEDIA_MISSING");
     await access(job.mediaAsset.filePath);
     await new PublishRepository(prisma).recoverIncorrectPublishedPost(publishJobId);
+    refresh("/published", "/review", "/queue", "/");
   } catch (error) {
-    const message = error instanceof Error && "code" in error && error.code === "ENOENT" ? "A publication cannot return to Review because its local video is missing." : error instanceof Error ? error.message : "The publication could not be recovered.";
-    redirectWithNotice("/published", message, "error");
+    redirectWithErrorNotice("/published", error);
   }
-  refresh("/published", "/review", "/queue", "/");
 }
 
 async function dashboardPublisher(publisherIdentityId: string) {
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   const identity = await prisma.browserIdentity.findFirst({ where: { id: publisherIdentityId, role: "PUBLISHER", enabled: true } });
-  if (!identity || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) throw new Error("The selected Publisher identity must be verified again.");
+  if (!identity || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) throw userError("The selected Publisher identity must be verified again.", "IDENTITY_UNVERIFIED");
   const logger = pino({ level: "silent" });
   const repository = new PublishRepository(prisma);
   const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
@@ -423,38 +478,42 @@ async function dashboardPublisher(publisherIdentityId: string) {
 }
 
 export async function publishNow(formData: FormData) {
-  let actionError: string | null = null;
   try {
     const publishJobId = id.parse(formData.get("publishJobId"));
     const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, select: { publisherIdentityId: true } });
-    if (!job.publisherIdentityId) throw new Error("Choose a Publisher identity before publishing.");
+    if (!job.publisherIdentityId) throw userError("Choose a Publisher identity before publishing.", "IDENTITY_REQUIRED");
     const service = await dashboardPublisher(job.publisherIdentityId);
-    if (!await service.processJob(publishJobId)) actionError = "This publish job could not be claimed.";
-    if (!actionError) {
-      const result = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, select: { status: true, lastError: true } });
-      if (result.status !== "COMPLETED") actionError = result.lastError ?? "Publishing did not complete.";
-    }
+    if (!await service.processJob(publishJobId)) redirectWithNotice("/queue", "This publish job could not be claimed.", "error");
+    const result = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, select: { status: true, lastError: true } });
+    if (result.status !== "COMPLETED") redirectWithNotice("/queue", result.lastError ?? "Publishing did not complete.", "error");
+    refresh("/", "/queue", "/review", "/downloads", "/published");
   } catch (error) {
-    actionError = error instanceof Error ? error.message : "Publishing failed.";
+    redirectWithErrorNotice("/queue", error);
   }
-  if (actionError) redirectWithNotice("/queue", actionError, "error");
-  refresh("/", "/queue", "/review", "/downloads", "/published");
 }
 
 export async function downloadNow(formData: FormData) {
-  const jobId = id.parse(formData.get("jobId"));
-  const repository = new DownloadRepository(prisma);
-  await repository.requestNow(jobId);
-  await triggerPendingDownloads(1);
-  refresh("/", "/queue", "/downloads");
+  try {
+    const jobId = id.parse(formData.get("jobId"));
+    const repository = new DownloadRepository(prisma);
+    await repository.requestNow(jobId);
+    await triggerPendingDownloads(1);
+    refresh("/", "/queue", "/downloads");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 export async function processPendingDownloads(formData?: FormData) {
-  const limit = formData?.has("limit") ? z.coerce.number().int().min(1).max(1_000).parse(formData.get("limit")) : undefined;
-  const started = await triggerPendingDownloads(limit);
-  refresh("/", "/queue", "/downloads");
-  if (started) redirectWithNotice("/queue", "Downloads started in the background. You can keep browsing — progress shows below.");
-  redirectWithNotice("/queue", "A download run is already active. Watch its progress below.", "info");
+  try {
+    const limit = formData?.has("limit") ? z.coerce.number().int().min(1).max(1_000).parse(formData.get("limit")) : undefined;
+    const started = await triggerPendingDownloads(limit);
+    refresh("/", "/queue", "/downloads");
+    if (started) redirectWithNotice("/queue", "Downloads started in the background. You can keep browsing — progress shows below.");
+    redirectWithNotice("/queue", "A download run is already active. Watch its progress below.", "info");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 export async function bulkRetryDownloads(formData: FormData) {
@@ -478,8 +537,7 @@ export async function removeMedia(formData: FormData) {
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
     await new MediaRemovalService(prisma).remove(sourcePostId, { videos: config.videoStoragePath, thumbnails: config.thumbnailStoragePath });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Local media could not be deleted.";
-    redirectWithNotice(returnPath, message, "error");
+    redirectWithErrorNotice(returnPath, error);
   }
   refresh("/downloads", "/review", "/queue", "/published", "/videos", "/");
 }
@@ -490,8 +548,7 @@ export async function confirmPublishedAndRemoveMedia(formData: FormData) {
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
     await new MediaRemovalService(prisma).removePublished(sourcePostId, { videos: config.videoStoragePath, thumbnails: config.thumbnailStoragePath });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Local media could not be deleted.";
-    redirectWithNotice("/published", message, "error");
+    redirectWithErrorNotice("/published", error);
   }
   refresh("/published", "/downloads", "/videos", "/");
 }
@@ -501,10 +558,10 @@ export async function fetchPostPerformance(formData: FormData) {
   const query = new URLSearchParams({ performance: publishedPostId });
   try {
     const record = await prisma.publishedPost.findUniqueOrThrow({ where: { id: publishedPostId }, select: { platformUrl: true, publishJob: { select: { publisherIdentity: true } } } });
-    if (!record.platformUrl) throw new Error("This publication does not have an X post URL.");
+    if (!record.platformUrl) throw userError("This publication does not have an X post URL.");
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
     const identity = record.publishJob.publisherIdentity;
-    if (!identity) throw new Error("This publication has no Publisher identity.");
+    if (!identity) throw userError("This publication has no Publisher identity.", "IDENTITY_REQUIRED");
     const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
     const browser = new PlaywrightTimelineBrowser({
       headless: config.playwrightHeadless,
@@ -522,8 +579,7 @@ export async function fetchPostPerformance(formData: FormData) {
     query.set("fetchedAt", new Date().toISOString());
     for (const [key, value] of Object.entries(metrics)) query.set(key, value === null ? "" : String(value));
   } catch (error) {
-    const message = error instanceof ResourceBusyError ? "The X browser is busy. Wait for the active operation to finish." : error instanceof Error ? error.message : "Could not fetch post performance.";
-    query.set("performanceError", message);
+    query.set("performanceError", toUserMessage(error));
   }
   redirect(`/published?${query}`);
 }
@@ -536,15 +592,19 @@ export async function downloadAgain(formData: FormData) {
 }
 
 export async function sendToReview(formData: FormData) {
-  const sourcePostId = id.parse(formData.get("sourcePostId"));
-  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { mediaAsset: true, publishJobs: true } });
-  if (!post.mediaAsset || post.mediaAsset.localRemovedAt) throw new Error("This post has no available local media.");
-  if (post.publishJobs.length > 0) throw new Error("This post already has a review or publish job.");
-  if (post.status !== "DOWNLOADED") throw new Error("Only downloaded posts can enter review.");
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const scheduled = await new SchedulerRepository(prisma).scheduleDownloadedAsset(sourcePostId, (source) => resolveCaption(source, config.captionTemplates));
-  if (!scheduled) throw new Error("This post is no longer eligible for Review.");
-  refresh("/downloads", "/review", "/queue", "/");
+  try {
+    const sourcePostId = id.parse(formData.get("sourcePostId"));
+    const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { mediaAsset: true, publishJobs: true } });
+    if (!post.mediaAsset || post.mediaAsset.localRemovedAt) throw userError("This post has no available local media.", "MEDIA_MISSING");
+    if (post.publishJobs.length > 0) throw userError("This post already has a review or publish job.");
+    if (post.status !== "DOWNLOADED") throw userError("Only downloaded posts can enter review.");
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const scheduled = await new SchedulerRepository(prisma).scheduleDownloadedAsset(sourcePostId, (source) => resolveCaption(source, config.captionTemplates));
+    if (!scheduled) throw userError("This post is no longer eligible for Review.", "STALE_STATE");
+    refresh("/downloads", "/review", "/queue", "/");
+  } catch (error) {
+    redirectWithErrorNotice("/downloads", error);
+  }
 }
 
 export async function sendAllToReview() {
@@ -922,12 +982,16 @@ export async function saveDiscordNotificationSettings(formData: FormData) {
 }
 
 export async function sendDiscordTestNotification() {
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  if (!config.discordBotToken || !config.discordOwnerId) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env to send a test message.");
-  const result = await new DiscordDmTransport().send(config.discordOwnerId, "Cenblue test message — notifications are working.");
-  refresh("/settings");
-  if (result.ok) redirectWithNotice("/settings", "Test message delivered to your Discord DM.");
-  redirectWithNotice("/settings", `Test message failed: ${result.error ?? "The test message could not be delivered."}`, "error");
+  try {
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    if (!config.discordBotToken || !config.discordOwnerId) throw userError("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env to send a test message.");
+    const result = await new DiscordDmTransport().send(config.discordOwnerId, "Cenblue test message — notifications are working.");
+    refresh("/settings");
+    if (result.ok) redirectWithNotice("/settings", "Test message delivered to your Discord DM.");
+    redirectWithNotice("/settings", "The test message could not be delivered. Check the Discord bot token and owner ID in .env, then try again.", "error");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function publishManualPost(formData: FormData) {
@@ -940,21 +1004,21 @@ export async function publishManualPost(formData: FormData) {
     const caption = validateCaption(z.string().parse(formData.get("text")), false);
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
     if (hasImage) {
-      if (image.size > 10 * 1024 * 1024) throw new Error("The image must be 10 MB or smaller.");
-      if (!(image.type in manualImageTypes)) throw new Error("Use a JPEG, PNG, WebP, or GIF image.");
+      if (image.size > 10 * 1024 * 1024) throw userError("The image must be 10 MB or smaller.");
+      if (!(image.type in manualImageTypes)) throw userError("Use a JPEG, PNG, WebP, or GIF image.");
       const type = image.type as keyof typeof manualImageTypes;
       const bytes = new Uint8Array(await image.arrayBuffer());
-      if (!validImageSignature(type, bytes)) throw new Error("The uploaded file does not match its image type.");
+      if (!validImageSignature(type, bytes)) throw userError("The uploaded file does not match its image type.");
       await mkdir(config.tempStoragePath, { recursive: true });
       imagePath = resolve(config.tempStoragePath, `manual-post-${randomUUID()}.${manualImageTypes[type]}`);
       await writeFile(imagePath, bytes);
     }
     const publisherIdentityIds = z.array(id).min(1, "Select at least one Publisher identity.").parse(formData.getAll("publisherIdentityId"));
     const identities = await prisma.browserIdentity.findMany({ where: { id: { in: publisherIdentityIds }, role: "PUBLISHER", enabled: true } });
-    if (identities.length !== new Set(publisherIdentityIds).size) throw new Error("One or more Publisher identities are unavailable.");
+    if (identities.length !== new Set(publisherIdentityIds).size) throw userError("One or more Publisher identities are unavailable.", "IDENTITY_REQUIRED");
     const logger = pino({ level: "silent" });
     for (const identity of identities) {
-      if (!identity.expectedUsername || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) throw new Error(`${identity.label} must be verified before publishing.`);
+      if (!identity.expectedUsername || !identity.verifiedAt || identity.verifiedUsername !== identity.expectedUsername || identity.verifiedFingerprint !== identityFingerprint(identity)) throw userError(`${identity.label} must be verified before publishing.`, "IDENTITY_UNVERIFIED");
       const browserLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
       const capacityLease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), "publisher-capacity:1", Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
       const publisher = new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: resolve(config.repositoryRoot, identity.profilePath), browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease: combineExclusiveLeases(capacityLease, browserLease), diagnosticsDirectory: config.logStoragePath, headless: config.playwrightHeadless, minUploadMbps: config.publishMinUploadMbps, maxUploadTimeoutMs: config.publishMaxUploadMinutes * 60_000, expectedUsername: identity.expectedUsername }, logger);
@@ -963,7 +1027,7 @@ export async function publishManualPost(formData: FormData) {
       publishedUrl ??= result.platformUrl;
     }
   } catch (error) {
-    errorMessage = error instanceof Error ? error.message : String(error);
+    errorMessage = toUserMessage(error);
   } finally {
     if (imagePath) await rm(imagePath, { force: true }).catch(() => undefined);
   }

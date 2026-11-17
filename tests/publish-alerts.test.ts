@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pastDueWarning } from "../apps/dashboard/app/lib/publish-alerts";
+import { pastDueWarning, publishBlockState } from "../apps/dashboard/app/lib/publish-alerts";
 
 const now = new Date("2026-08-04T19:10:00.000Z");
 const earlier = new Date("2026-08-04T18:56:00.000Z");
@@ -59,5 +59,45 @@ describe("pastDueWarning", () => {
     expect(pastDueWarning({ status: "RETRY_WAIT", scheduledFor: earlier, nextAttemptAt: pending, publisherIdentityId: "pub-1" }, settings, now)).toBeNull();
     const result = pastDueWarning({ status: "RETRY_WAIT", scheduledFor: earlier, nextAttemptAt: earlier, publisherIdentityId: "pub-1" }, settings, now);
     expect(result).toBeNull();
+  });
+});
+
+describe("publishBlockState", () => {
+  const base = { scheduledFor: earlier, nextAttemptAt: null, publisherIdentityId: "pub-1" };
+
+  it("classifies session failures as SESSION_EXPIRED with actionable text", () => {
+    const result = publishBlockState({ ...base, status: "FAILED", lastError: "NOT_LOGGED_IN: Publisher browser profile is not logged in" }, settings, now);
+    expect(result?.state).toBe("SESSION_EXPIRED");
+    expect(result?.message).toContain("signed in to X");
+    const intervention = publishBlockState({ ...base, status: "MANUAL_ATTENTION", lastError: "ACCOUNT_INTERVENTION: account requires manual attention" }, settings, now);
+    expect(intervention?.state).toBe("SESSION_EXPIRED");
+    expect(intervention?.message).toContain("manual attention");
+  });
+
+  it("keeps RETRY_WAIT session failures visible even while waiting", () => {
+    const pending = new Date("2026-08-04T19:20:00.000Z");
+    const result = publishBlockState({ ...base, status: "RETRY_WAIT", nextAttemptAt: pending, lastError: "PROFILE_IN_USE: profile is in use" }, settings, now);
+    expect(result?.state).toBe("SESSION_EXPIRED");
+  });
+
+  it("does not flag session errors on jobs that never ran", () => {
+    expect(publishBlockState({ ...base, status: "READY_FOR_REVIEW", lastError: "NOT_LOGGED_IN: Publisher browser profile is not logged in" }, settings, now)).toBeNull();
+  });
+
+  it("classifies past-due jobs as BLOCKED", () => {
+    const result = publishBlockState({ ...base, status: "APPROVED", lastError: null }, { ...settings, publishMode: "ASSISTED" }, now);
+    expect(result?.state).toBe("BLOCKED");
+    expect(result?.message).toContain("Publish mode");
+  });
+
+  it("prefers SESSION_EXPIRED over a past-due block", () => {
+    const result = publishBlockState({ ...base, status: "RETRY_WAIT", lastError: "NOT_LOGGED_IN: Publisher browser profile is not logged in" }, { ...settings, publishMode: "ASSISTED" }, now);
+    expect(result?.state).toBe("SESSION_EXPIRED");
+  });
+
+  it("returns null for healthy or unrelated failures", () => {
+    expect(publishBlockState({ ...base, status: "APPROVED", lastError: null }, settings, now)).toBeNull();
+    expect(publishBlockState({ ...base, status: "FAILED", lastError: "SUBMISSION_FAILED: composer submit timed out" }, settings, now)).toBeNull();
+    expect(publishBlockState({ ...base, status: "COMPLETED", lastError: null }, settings, now)).toBeNull();
   });
 });
