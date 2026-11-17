@@ -35,3 +35,7 @@ If Review compression fails, confirm that FFmpeg and FFprobe execute from the co
 ## Setup And Import Failures
 
 `pnpm setup` preserves the replaced environment as `.env.previous`. If setup is interrupted, inspect both files before retrying. The wizard no longer guides browser sessions; add and verify Collector and Publisher identities from **Settings → Isolated X identities** after it finishes. Portable imports accept only the documented versioned schema; remove machine paths, session fields, media references, and unknown keys rather than bypassing validation. After every import, establish fresh browser sessions and rerun both session checks.
+
+## Dashboard Access Failures
+
+When `DASHBOARD_PASSWORD` is set, every dashboard page redirects to `/login` and publish, delete, and reset actions ask you to confirm the password if your last sign-in is older than 15 minutes. Sign in with the password from `.env`; changing `DASHBOARD_PASSWORD` immediately invalidates existing sign-in cookies because the cookie signature is derived from it. Five failed attempts lock further attempts for up to 15 minutes — wait for the message or restart the dashboard to clear the in-memory counter. If you no longer want a password, remove `DASHBOARD_PASSWORD` from `.env` and restart; the dashboard returns to open access on this machine. `/api/health` and `/login` stay reachable without a cookie so the supervisor health gate and the login page keep working.

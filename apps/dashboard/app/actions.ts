@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { access, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
@@ -22,6 +23,7 @@ import pino from "pino";
 import { scheduleFromFields } from "./lib/schedule";
 import { triggerPendingDownloads } from "./lib/download-runner";
 import { triggerCollection } from "./lib/background-collector";
+import { AUTH_COOKIE, AUTH_MAX_AGE_SECONDS, authPassword, checkPassword, issueAuthValue, loginRateLimiter, REAUTH_WINDOW_MS, safeNext, verifyAuthValue } from "./lib/auth";
 
 const username = z.string().trim().regex(/^[A-Za-z0-9_]{1,15}$/);
 const id = z.string().min(1);
@@ -44,6 +46,49 @@ function redirectWithErrorNotice(path: string, error: unknown): never {
     if (digest.startsWith("NEXT_REDIRECT") || digest.startsWith("NEXT_NOT_FOUND")) throw error;
   }
   redirectWithNotice(path, toUserMessage(error), "error");
+}
+
+function loginHref(next: string): string {
+  return next === "/" ? "/login" : `/login?next=${encodeURIComponent(next)}`;
+}
+
+export async function login(formData: FormData) {
+  const nextEntry = formData.get("next");
+  const next = safeNext(typeof nextEntry === "string" ? nextEntry : null);
+  const password = authPassword();
+  if (!password) redirect("/");
+  const requestHeaders = await headers();
+  const clientKey = requestHeaders.get("x-forwarded-for")?.split(",")[0]?.trim() || requestHeaders.get("x-real-ip") || "local";
+  const verdict = loginRateLimiter.verdict(clientKey);
+  if (!verdict.ok) {
+    const minutes = Math.max(1, Math.ceil(verdict.retryAfterMs / 60_000));
+    redirectWithNotice(loginHref(next), `Too many failed attempts. Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`, "error");
+  }
+  if (!await checkPassword(String(formData.get("password") ?? ""), password)) {
+    loginRateLimiter.failure(clientKey);
+    redirectWithNotice(loginHref(next), "Incorrect password.", "error");
+  }
+  loginRateLimiter.success(clientKey);
+  (await cookies()).set(AUTH_COOKIE, await issueAuthValue(Date.now(), password), { httpOnly: true, sameSite: "lax", path: "/", maxAge: AUTH_MAX_AGE_SECONDS });
+  redirect(next);
+}
+
+export async function logout() {
+  (await cookies()).delete(AUTH_COOKIE);
+  redirectWithNotice("/login", "Signed out.", "success");
+}
+
+async function requireRecentAuth(): Promise<void> {
+  const password = authPassword();
+  if (!password) return;
+  const issuedAt = await verifyAuthValue((await cookies()).get(AUTH_COOKIE)?.value, password);
+  if (issuedAt !== null && Date.now() - issuedAt <= REAUTH_WINDOW_MS) return;
+  let next = "/";
+  try {
+    const referer = (await headers()).get("referer");
+    if (referer) next = safeNext(new URL(referer).pathname + new URL(referer).search);
+  } catch { next = "/"; }
+  redirectWithNotice(loginHref(next), issuedAt === null ? "Sign in to continue." : "Confirm your password to continue with this action.", "error");
 }
 
 function inside(root: string, path: string): boolean {
@@ -107,6 +152,7 @@ export async function restoreSource(formData: FormData) {
 }
 
 export async function purgeSource(formData: FormData) {
+  await requireRecentAuth();
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   await new SourcePurgeService(prisma).purge(
     id.parse(formData.get("sourceId")),
@@ -117,6 +163,7 @@ export async function purgeSource(formData: FormData) {
 }
 
 export async function resetAllData(formData: FormData) {
+  await requireRecentAuth();
   if (z.string().parse(formData.get("confirmation")).trim() !== "RESET ALL") throw new Error('Type "RESET ALL" to confirm the full reset.');
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   await new FullResetService(prisma).reset({ logs: config.logStoragePath, thumbnails: config.thumbnailStoragePath, temporary: config.tempStoragePath, backups: config.backupStoragePath, recovery: resolve(config.backupStoragePath, "..", "reset-recovery") });
@@ -195,6 +242,7 @@ export async function cancelCollection(formData: FormData) {
 }
 
 export async function schedulePublish(formData: FormData) {
+  await requireRecentAuth();
   try {
     const publishJobId = id.parse(formData.get("publishJobId"));
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
@@ -274,6 +322,7 @@ export async function compressReviewVideo(formData: FormData) {
 }
 
 export async function approveReview(formData: FormData) {
+  await requireRecentAuth();
   try {
     const publishJobId = id.parse(formData.get("publishJobId"));
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
@@ -307,6 +356,7 @@ export async function rejectReview(formData: FormData) {
 }
 
 export async function bulkReview(formData: FormData) {
+  await requireRecentAuth();
   try {
     const jobIds = z.array(id).min(1, "Select at least one review item.").parse(formData.getAll("publishJobId"));
     const decision = z.enum(["approve", "reject", "downloads"]).parse(formData.get("decision"));
@@ -332,6 +382,7 @@ export async function bulkReview(formData: FormData) {
 }
 
 export async function scheduleBatchReview(formData: FormData) {
+  await requireRecentAuth();
   try {
     const jobIds = z.array(id).min(1, "Select at least one review item.").parse(formData.getAll("publishJobId"));
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
@@ -392,6 +443,7 @@ export async function restoreDuplicate(formData: FormData) {
 }
 
 export async function retryJob(formData: FormData) {
+  await requireRecentAuth();
   try {
     const jobId = id.parse(formData.get("jobId"));
     const jobType = z.enum(["download", "publish"]).parse(formData.get("jobType"));
@@ -478,6 +530,7 @@ async function dashboardPublisher(publisherIdentityId: string) {
 }
 
 export async function publishNow(formData: FormData) {
+  await requireRecentAuth();
   try {
     const publishJobId = id.parse(formData.get("publishJobId"));
     const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, select: { publisherIdentityId: true } });
@@ -531,6 +584,7 @@ export async function bulkDownloadNow(formData: FormData) {
 }
 
 export async function removeMedia(formData: FormData) {
+  await requireRecentAuth();
   const returnPath = formData.get("returnPath") === "/videos" ? "/videos" : "/downloads";
   try {
     const sourcePostId = id.parse(formData.get("sourcePostId"));
@@ -543,6 +597,7 @@ export async function removeMedia(formData: FormData) {
 }
 
 export async function confirmPublishedAndRemoveMedia(formData: FormData) {
+  await requireRecentAuth();
   try {
     const sourcePostId = id.parse(formData.get("sourcePostId"));
     const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
@@ -695,6 +750,7 @@ export async function checkBrowserSession(formData: FormData) {
 }
 
 export async function resetBrowserProfile(formData: FormData) {
+  await requireRecentAuth();
   const role = browserRole.parse(formData.get("role"));
   const settings = new SettingsRepository(prisma);
   const config = applyStoredSettings(loadConfig(), await settings.getAll());
@@ -834,6 +890,7 @@ export async function updateIdentityDailyLimit(formData: FormData) {
 }
 
 export async function deleteIdentityProfile(formData: FormData) {
+  await requireRecentAuth();
   const identityId = id.parse(formData.get("identityId"));
   const repository = new BrowserIdentityRepository(prisma);
   const identity = await repository.find(identityId);
@@ -851,6 +908,7 @@ export async function deleteIdentityProfile(formData: FormData) {
 }
 
 export async function deleteIdentityPermanently(formData: FormData) {
+  await requireRecentAuth();
   const identityId = id.parse(formData.get("identityId"));
   const confirmation = z.string().parse(formData.get("confirmation")).trim();
   const repository = new BrowserIdentityRepository(prisma);
@@ -880,6 +938,7 @@ async function withIdentityLeases<T>(identityIds: string[], operation: () => Pro
 }
 
 export async function clearAllBrowserProfiles(formData: FormData) {
+  await requireRecentAuth();
   if (z.string().parse(formData.get("confirmation")).trim() !== "DELETE ALL PROFILES") throw new Error('Type "DELETE ALL PROFILES" to confirm.');
   const identities = await prisma.browserIdentity.findMany({ select: { id: true } });
   const outcomes = await withIdentityLeases(identities.map((identity) => identity.id), () => new BrowserProfileRemovalService(loadConfig().repositoryRoot).clearAll());
@@ -995,6 +1054,7 @@ export async function sendDiscordTestNotification() {
 }
 
 export async function publishManualPost(formData: FormData) {
+  await requireRecentAuth();
   const image = formData.get("image");
   const hasImage = image instanceof File && image.size > 0;
   let imagePath: string | null = null;
