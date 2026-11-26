@@ -1,5 +1,6 @@
 export const xSelectors = {
   accountMenuButton: "[data-testid='SideNav_AccountSwitcher_Button']",
+  profileLink: "a[aria-label='Profile'][href^='/']",
   loginLink: "a[href='/login']",
   timelinePost: "article[data-testid='tweet']",
   statusLink: "a[href*='/status/']",

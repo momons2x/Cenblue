@@ -1,5 +1,6 @@
 export const xPublisherSelectors = {
   accountMenuButton: "[data-testid='SideNav_AccountSwitcher_Button']",
+  profileLink: "a[aria-label='Profile'][href^='/']",
   loginLink: "a[href='/login']",
   composer: "[data-testid='tweetTextarea_0']",
   composerDialog: "[role='dialog']",

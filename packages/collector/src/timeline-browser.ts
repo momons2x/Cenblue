@@ -136,7 +136,7 @@ export class PlaywrightTimelineBrowser implements TimelineBrowser {
 
   private async assertLoggedIn(page: Page, navigateToProfile = false): Promise<string | null> {
     await page.goto("https://x.com/home", { waitUntil: "domcontentloaded", timeout: this.operationTimeoutMs });
-    const accountMenu = page.locator(xSelectors.accountMenuButton).first();
+    const accountMenu = page.locator(`${xSelectors.accountMenuButton}, ${xSelectors.profileLink}`).first();
     await Promise.race([
       accountMenu.waitFor({ state: "visible", timeout: this.operationTimeoutMs }),
       page.locator(xSelectors.loginLink).first().waitFor({ state: "visible", timeout: this.operationTimeoutMs }),

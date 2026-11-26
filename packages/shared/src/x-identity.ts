@@ -31,7 +31,7 @@ export async function detectXUsername(page: XIdentityPage, accountMenuSelector: 
     if (username && navigateToProfile) await page.goto(`https://x.com/${username}`).catch(() => undefined);
     return username;
   };
-  const profileHref = await page.locator("a[data-testid='AppTabBar_Profile_Link']").first().getAttribute("href").catch(() => null);
+  const profileHref = await page.locator("a[data-testid='AppTabBar_Profile_Link'], a[aria-label='Profile']").first().getAttribute("href").catch(() => null);
   const profileUsername = usernameFromHref(profileHref);
   if (profileUsername) return finish(profileUsername);
 
