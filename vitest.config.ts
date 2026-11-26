@@ -4,6 +4,9 @@ export default defineConfig({
   test: {
     fileParallelism: false,
     include: ["tests/**/*.test.ts"],
+    env: {
+      DATABASE_URL: process.env.DATABASE_URL ?? "file:../../../storage/temp/cenblu-test.db",
+    },
     coverage: {
       provider: "v8",
       reportsDirectory: "coverage",
