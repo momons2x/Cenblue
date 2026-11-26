@@ -69,31 +69,38 @@ export function mergeTimelineCandidates(target: Map<string, RawTimelinePost>, ca
 }
 
 async function extractPosts(page: Page): Promise<RawTimelinePost[]> {
-  return page.locator(xSelectors.timelinePost).evaluateAll((articles, selectors) => articles.map((article) => {
-    const timestamp = article.querySelector(selectors.timestamp);
-    const timestampParent = timestamp?.parentElement;
-    const statusHref = (timestampParent?.tagName === "A" ? timestampParent.getAttribute("href") : null)
-      ?? article.querySelector(selectors.statusLink)?.getAttribute("href")
-      ?? null;
-    const statusPostId = statusHref?.match(/\/status\/(\d+)/)?.[1];
-    const linkedPostIds = [...article.querySelectorAll(selectors.statusLink)]
-      .map((link) => link.getAttribute("href")?.match(/\/status\/(\d+)/)?.[1])
-      .filter((value): value is string => Boolean(value));
-    const hasVideo = article.querySelector(selectors.video) !== null;
-    const socialContext = article.querySelector(selectors.socialContext)?.textContent ?? "";
-    const articleText = article.textContent ?? "";
+  return page.locator(xSelectors.timelinePost).evaluateAll((articles, selectors) => {
+    const relativeTime = /^\d+\s*[smhd]$|^[A-Z][a-z]{2} \d{1,2}(?:, \d{4})?$/;
+    return articles.map((article) => {
+      const timestamp = article.querySelector(selectors.timestamp);
+      const timestampParent = timestamp?.parentElement;
+      const statusLinks = [...article.querySelectorAll(selectors.statusLink)];
+      const permalink = statusLinks.find((link) => /\/status\/\d+/.test(link.getAttribute("href") ?? "") && relativeTime.test((link.textContent ?? "").trim()))
+        ?? statusLinks.find((link) => /\/status\/\d+/.test(link.getAttribute("href") ?? ""))
+        ?? null;
+      const statusHref = (timestampParent?.tagName === "A" ? timestampParent.getAttribute("href") : null)
+        ?? permalink?.getAttribute("href")
+        ?? null;
+      const statusPostId = statusHref?.match(/\/status\/(\d+)/)?.[1];
+      const linkedPostIds = statusLinks
+        .map((link) => link.getAttribute("href")?.match(/\/status\/(\d+)/)?.[1])
+        .filter((value): value is string => Boolean(value));
+      const hasVideo = article.querySelector(selectors.video) !== null;
+      const socialContext = article.querySelector(selectors.socialContext)?.textContent ?? "";
+      const articleText = article.textContent ?? "";
 
-  return {
-      statusHref,
-      text: article.querySelector(selectors.tweetText)?.textContent ?? "",
-      datetime: timestamp?.getAttribute("datetime") ?? null,
-      hasVideo,
-      // Conservatively reject media ownership when a card embeds another post ID.
-      hasOwnVideo: hasVideo && Boolean(statusPostId) && linkedPostIds.every((postId) => postId === statusPostId),
-      isReply: /replying to/i.test(articleText),
-      isRepost: /reposted/i.test(socialContext),
-    };
-  }), xSelectors);
+      return {
+        statusHref,
+        text: article.querySelector(selectors.tweetText)?.textContent ?? "",
+        datetime: timestamp?.getAttribute("datetime") ?? null,
+        hasVideo,
+        // Conservatively reject media ownership when a card embeds another post ID.
+        hasOwnVideo: hasVideo && Boolean(statusPostId) && linkedPostIds.every((postId) => postId === statusPostId),
+        isReply: /replying to/i.test(articleText),
+        isRepost: /reposted/i.test(socialContext),
+      };
+    });
+  }, xSelectors);
 }
 
 export class PlaywrightTimelineBrowser implements TimelineBrowser {

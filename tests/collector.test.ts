@@ -116,6 +116,13 @@ describe("collector normalization", () => {
     expect(normalizeTimelinePost({ ...originalVideo, datetime: "invalid" }, sourceInput)).toBeNull();
   });
 
+  it("derives postedAt from the status id when the timeline exposes no absolute timestamp", () => {
+    const post = normalizeTimelinePost({ ...originalVideo, datetime: null }, sourceInput);
+    expect(post).not.toBeNull();
+    expect(post?.postedAt).toEqual(new Date(Math.floor(1234567890 / 2 ** 22) + 1_288_834_974_657));
+    expect(normalizeTimelinePost({ ...originalVideo, datetime: "invalid" }, sourceInput)).toBeNull();
+  });
+
   it("allows authored video replies only under the explicit reply policy", () => {
     const reply = { ...originalVideo, isReply: true };
     expect(normalizeTimelinePost(reply, sourceInput)).toBeNull();

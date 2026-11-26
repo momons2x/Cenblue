@@ -16,6 +16,23 @@ export type RawTimelinePost = z.infer<typeof rawTimelinePostSchema>;
 
 const statusPathPattern = /^\/?([A-Za-z0-9_]{1,15})\/status\/(\d+)(?:[/?#].*)?$/;
 
+const SNOWFLAKE_EPOCH_MS = 1_288_834_974_657;
+const SNOWFLAKE_SHIFT = 2 ** 22;
+
+function postedAtFromStatusId(platformPostId: string): Date | null {
+  if (!/^\d{1,19}$/.test(platformPostId)) return null;
+  const id = Number(platformPostId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const postedAt = new Date(Math.floor(id / SNOWFLAKE_SHIFT) + SNOWFLAKE_EPOCH_MS);
+  return Number.isNaN(postedAt.getTime()) ? null : postedAt;
+}
+
+function resolvePostedAt(datetime: string | null, platformPostId: string): Date | null {
+  if (datetime === null) return postedAtFromStatusId(platformPostId);
+  const postedAt = new Date(datetime);
+  return Number.isNaN(postedAt.getTime()) ? null : postedAt;
+}
+
 export type ParsedStatusUrl = {
   username: string;
   platformPostId: string;
@@ -54,12 +71,12 @@ export function normalizeTimelinePost(rawValue: unknown, source: SourceAccountIn
   }
 
   const status = parseStatusUrl(raw.data.statusHref);
-  if (!status || status.username.toLowerCase() !== source.username.toLowerCase() || !raw.data.datetime) {
+  if (!status || status.username.toLowerCase() !== source.username.toLowerCase()) {
     return null;
   }
 
-  const postedAt = new Date(raw.data.datetime);
-  if (Number.isNaN(postedAt.getTime())) {
+  const postedAt = resolvePostedAt(raw.data.datetime, status.platformPostId);
+  if (!postedAt) {
     return null;
   }
 
@@ -75,11 +92,11 @@ export function normalizeTimelinePost(rawValue: unknown, source: SourceAccountIn
 
 export function normalizeBookmarkedPost(rawValue: unknown): BookmarkedPost | null {
   const raw = rawTimelinePostSchema.safeParse(rawValue);
-  if (!raw.success || raw.data.isRepost || !(raw.data.hasOwnVideo ?? raw.data.hasVideo) || !raw.data.statusHref || !raw.data.datetime) return null;
+  if (!raw.success || raw.data.isRepost || !(raw.data.hasOwnVideo ?? raw.data.hasVideo) || !raw.data.statusHref) return null;
   const status = parseStatusUrl(raw.data.statusHref);
   if (!status) return null;
-  const postedAt = new Date(raw.data.datetime);
-  if (Number.isNaN(postedAt.getTime())) return null;
+  const postedAt = resolvePostedAt(raw.data.datetime, status.platformPostId);
+  if (!postedAt) return null;
   const result = bookmarkedPostSchema.safeParse({
     platformPostId: status.platformPostId,
     sourceUrl: status.sourceUrl,
