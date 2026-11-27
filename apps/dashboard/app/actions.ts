@@ -18,7 +18,7 @@ import { buildBatchSchedule } from "@cenblu/scheduler";
 import { BrowserProfileRemovalService, FullResetService, MediaRemovalService, SourcePurgeService } from "@cenblu/operations";
 import { discoverInstalledChromiumBrowsers, LocalPublishMediaVerifier, openChromiumProfile, PublishService, resolveCaption, validateCaption, validateChromiumExecutable, XPlaywrightPublisher } from "@cenblu/publisher";
 import { combineExclusiveLeases, ResourceBusyError } from "@cenblu/shared/lease";
-import { toUserMessage, userError } from "@cenblu/shared/errors";
+import { AppError, isFileLockError, toUserMessage, userError } from "@cenblu/shared/errors";
 import pino from "pino";
 import { scheduleFromFields } from "./lib/schedule";
 import { triggerPendingDownloads } from "./lib/download-runner";
@@ -32,20 +32,21 @@ const manualImageTypes = { "image/jpeg": "jpg", "image/png": "png", "image/webp"
 
 function refresh(...paths: string[]) { paths.forEach((path) => revalidatePath(path)); }
 
-function redirectWithNotice(path: string, message: string, tone: "success" | "error" | "info" = "success"): never {
+function redirectWithNotice(path: string, message: string, tone: "success" | "error" | "info" = "success", field?: string): never {
   const [base, search = ""] = path.split("?");
   const query = new URLSearchParams(search);
   query.set("notice", message);
   query.set("tone", tone);
+  if (field) query.set("field", field);
   redirect(`${base}?${query.toString()}`);
 }
 
-function redirectWithErrorNotice(path: string, error: unknown): never {
+function redirectWithErrorNotice(path: string, error: unknown, field?: string): never {
   if (error && typeof error === "object" && "digest" in error) {
     const digest = String((error as { digest: unknown }).digest);
     if (digest.startsWith("NEXT_REDIRECT") || digest.startsWith("NEXT_NOT_FOUND")) throw error;
   }
-  redirectWithNotice(path, toUserMessage(error), "error");
+  redirectWithNotice(path, toUserMessage(error), "error", field);
 }
 
 function loginHref(next: string): string {
@@ -120,54 +121,84 @@ export async function addSource(formData: FormData) {
 }
 
 export async function toggleSource(formData: FormData) {
-  const sourceId = id.parse(formData.get("sourceId"));
-  const source = await prisma.sourceAccount.findUniqueOrThrow({ where: { id: sourceId } });
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  await new SourceAccountRepository(prisma, config.sourceAccountLimit).update(sourceId, { enabled: !source.enabled });
-  refresh("/", "/sources");
+  try {
+    const sourceId = id.parse(formData.get("sourceId"));
+    const source = await prisma.sourceAccount.findUniqueOrThrow({ where: { id: sourceId } });
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    await new SourceAccountRepository(prisma, config.sourceAccountLimit).update(sourceId, { enabled: !source.enabled });
+    refresh("/", "/sources");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function updateSourceLimit(formData: FormData) {
-  await new SourceAccountRepository(prisma).update(id.parse(formData.get("sourceId")), { collectLimit: limit.parse(formData.get("collectLimit")) });
-  refresh("/sources");
+  try {
+    await new SourceAccountRepository(prisma).update(id.parse(formData.get("sourceId")), { collectLimit: limit.parse(formData.get("collectLimit")) });
+    refresh("/sources");
+    redirectWithNotice("/sources", "Collection limit saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function updateSourceCaptionSettings(formData: FormData) {
-  await new SourceAccountRepository(prisma).update(id.parse(formData.get("sourceId")), {
-    captionTemplate: z.string().max(2_000).parse(formData.get("captionTemplate") ?? "") || null,
-    attributionTemplate: z.string().max(1_000).parse(formData.get("attributionTemplate") ?? "") || null,
-    hashtagRules: z.string().max(1_000).parse(formData.get("hashtagRules") ?? "") || null,
-  });
-  refresh("/sources", "/review");
+  try {
+    await new SourceAccountRepository(prisma).update(id.parse(formData.get("sourceId")), {
+      captionTemplate: z.string().max(2_000).parse(formData.get("captionTemplate") ?? "") || null,
+      attributionTemplate: z.string().max(1_000).parse(formData.get("attributionTemplate") ?? "") || null,
+      hashtagRules: z.string().max(1_000).parse(formData.get("hashtagRules") ?? "") || null,
+    });
+    refresh("/sources", "/review");
+    redirectWithNotice("/sources", "Caption settings saved for this source.");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function archiveSource(formData: FormData) {
-  await new SourceAccountRepository(prisma).archive(id.parse(formData.get("sourceId")));
-  refresh("/", "/sources");
+  try {
+    await new SourceAccountRepository(prisma).archive(id.parse(formData.get("sourceId")));
+    refresh("/", "/sources");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function restoreSource(formData: FormData) {
-  await new SourceAccountRepository(prisma).restore(id.parse(formData.get("sourceId")));
-  refresh("/", "/sources");
+  try {
+    await new SourceAccountRepository(prisma).restore(id.parse(formData.get("sourceId")));
+    refresh("/", "/sources");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function purgeSource(formData: FormData) {
   await requireRecentAuth();
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  await new SourcePurgeService(prisma).purge(
-    id.parse(formData.get("sourceId")),
-    username.parse(formData.get("confirmedUsername")),
-    { videos: config.videoStoragePath, thumbnails: config.thumbnailStoragePath, temporary: config.tempStoragePath },
-  );
-  refresh("/", "/sources", "/queue", "/downloads", "/published");
+  try {
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    await new SourcePurgeService(prisma).purge(
+      id.parse(formData.get("sourceId")),
+      username.parse(formData.get("confirmedUsername")),
+      { videos: config.videoStoragePath, thumbnails: config.thumbnailStoragePath, temporary: config.tempStoragePath },
+    );
+    refresh("/", "/sources", "/queue", "/downloads", "/published");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function resetAllData(formData: FormData) {
   await requireRecentAuth();
-  if (z.string().parse(formData.get("confirmation")).trim() !== "RESET ALL") throw new Error('Type "RESET ALL" to confirm the full reset.');
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  await new FullResetService(prisma).reset({ logs: config.logStoragePath, thumbnails: config.thumbnailStoragePath, temporary: config.tempStoragePath, backups: config.backupStoragePath, recovery: resolve(config.backupStoragePath, "..", "reset-recovery") });
-  refresh("/", "/sources", "/queue", "/downloads", "/review", "/published", "/logs", "/settings");
+  try {
+    if (z.string().parse(formData.get("confirmation")).trim() !== "RESET ALL") throw new Error('Type "RESET ALL" to confirm the full reset.');
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    await new FullResetService(prisma).reset({ logs: config.logStoragePath, thumbnails: config.thumbnailStoragePath, temporary: config.tempStoragePath, backups: config.backupStoragePath, recovery: resolve(config.backupStoragePath, "..", "reset-recovery") });
+    refresh("/", "/sources", "/queue", "/downloads", "/review", "/published", "/logs", "/settings");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function collectSource(formData: FormData) {
@@ -237,8 +268,12 @@ export async function collectBookmarks(formData: FormData) {
 }
 
 export async function cancelCollection(formData: FormData) {
-  await new CollectionRunRepository(prisma).requestCancel(id.parse(formData.get("runId")));
-  refresh("/sources", "/");
+  try {
+    await new CollectionRunRepository(prisma).requestCancel(id.parse(formData.get("runId")));
+    refresh("/sources", "/");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
+  }
 }
 
 export async function schedulePublish(formData: FormData) {
@@ -257,14 +292,19 @@ export async function schedulePublish(formData: FormData) {
 }
 
 export async function saveReview(formData: FormData) {
-  const publishJobId = id.parse(formData.get("publishJobId"));
-  const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, include: { sourcePost: true } });
-  const caption = z.string().max(280).parse(formData.get("caption"));
-  await prisma.$transaction([
-    prisma.publishJob.update({ where: { id: publishJobId }, data: { caption } }),
-    prisma.sourcePost.update({ where: { id: job.sourcePostId }, data: { reviewNotes: z.string().max(2_000).parse(formData.get("reviewNotes") ?? ""), internalTags: z.string().max(500).parse(formData.get("internalTags") ?? "") } }),
-  ]);
-  refresh("/review");
+  try {
+    const publishJobId = id.parse(formData.get("publishJobId"));
+    const job = await prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, include: { sourcePost: true } });
+    const caption = z.string().max(280).parse(formData.get("caption"));
+    await prisma.$transaction([
+      prisma.publishJob.update({ where: { id: publishJobId }, data: { caption } }),
+      prisma.sourcePost.update({ where: { id: job.sourcePostId }, data: { reviewNotes: z.string().max(2_000).parse(formData.get("reviewNotes") ?? ""), internalTags: z.string().max(500).parse(formData.get("internalTags") ?? "") } }),
+    ]);
+    refresh("/review");
+    redirectWithNotice("/review", "Draft saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/review", error);
+  }
 }
 
 export async function compressReviewVideo(formData: FormData) {
@@ -338,21 +378,31 @@ export async function approveReview(formData: FormData) {
 }
 
 export async function resolveReviewCaption(formData: FormData) {
-  const publishJobId = id.parse(formData.get("publishJobId"));
-  const [job, settings] = await Promise.all([
-    prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, include: { sourcePost: { include: { sourceAccount: true } } } }),
-    new SettingsRepository(prisma).getAll(),
-  ]);
-  const config = applyStoredSettings(loadConfig(), settings);
-  const caption = resolveCaption(job.sourcePost, config.captionTemplates);
-  await prisma.publishJob.update({ where: { id: publishJobId }, data: { caption } });
-  refresh("/review");
+  try {
+    const publishJobId = id.parse(formData.get("publishJobId"));
+    const [job, settings] = await Promise.all([
+      prisma.publishJob.findUniqueOrThrow({ where: { id: publishJobId }, include: { sourcePost: { include: { sourceAccount: true } } } }),
+      new SettingsRepository(prisma).getAll(),
+    ]);
+    const config = applyStoredSettings(loadConfig(), settings);
+    const caption = resolveCaption(job.sourcePost, config.captionTemplates);
+    await prisma.publishJob.update({ where: { id: publishJobId }, data: { caption } });
+    refresh("/review");
+    redirectWithNotice("/review", "Caption regenerated from the current templates.");
+  } catch (error) {
+    redirectWithErrorNotice("/review", error);
+  }
 }
 
 export async function rejectReview(formData: FormData) {
-  const publishJobId = id.parse(formData.get("publishJobId"));
-  await new PublishRepository(prisma).reject(publishJobId);
-  refresh("/review", "/queue");
+  try {
+    const publishJobId = id.parse(formData.get("publishJobId"));
+    await new PublishRepository(prisma).reject(publishJobId);
+    refresh("/review", "/queue");
+    redirectWithNotice("/review", "Item rejected.");
+  } catch (error) {
+    redirectWithErrorNotice("/review", error);
+  }
 }
 
 export async function bulkReview(formData: FormData) {
@@ -431,15 +481,20 @@ export async function scheduleBatchReview(formData: FormData) {
 
 
 export async function restoreDuplicate(formData: FormData) {
-  const sourcePostId = id.parse(formData.get("sourcePostId"));
-  const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { publishJobs: true, mediaAsset: true } });
-  const reviewJob = post.publishJobs.find((job) => job.publisherIdentityId === null) ?? post.publishJobs[0];
-  await prisma.$transaction([
-    prisma.sourcePost.update({ where: { id: sourcePostId }, data: { status: post.mediaAsset ? "READY_FOR_REVIEW" : "QUEUED_FOR_DOWNLOAD", duplicateReason: null } }),
-    ...(reviewJob ? [prisma.publishJob.update({ where: { id: reviewJob.id }, data: { status: "READY_FOR_REVIEW" } })] : []),
-    ...(!reviewJob && post.mediaAsset ? [prisma.publishJob.create({ data: { sourcePostId, mediaAssetId: post.mediaAsset.id, caption: post.text, status: "READY_FOR_REVIEW" } })] : []),
-  ]);
-  refresh("/review", "/queue");
+  try {
+    const sourcePostId = id.parse(formData.get("sourcePostId"));
+    const post = await prisma.sourcePost.findUniqueOrThrow({ where: { id: sourcePostId }, include: { publishJobs: true, mediaAsset: true } });
+    const reviewJob = post.publishJobs.find((job) => job.publisherIdentityId === null) ?? post.publishJobs[0];
+    await prisma.$transaction([
+      prisma.sourcePost.update({ where: { id: sourcePostId }, data: { status: post.mediaAsset ? "READY_FOR_REVIEW" : "QUEUED_FOR_DOWNLOAD", duplicateReason: null } }),
+      ...(reviewJob ? [prisma.publishJob.update({ where: { id: reviewJob.id }, data: { status: "READY_FOR_REVIEW" } })] : []),
+      ...(!reviewJob && post.mediaAsset ? [prisma.publishJob.create({ data: { sourcePostId, mediaAssetId: post.mediaAsset.id, caption: post.text, status: "READY_FOR_REVIEW" } })] : []),
+    ]);
+    refresh("/review", "/queue");
+    redirectWithNotice("/review", "Duplicate restored for review.");
+  } catch (error) {
+    redirectWithErrorNotice("/review", error);
+  }
 }
 
 export async function retryJob(formData: FormData) {
@@ -487,8 +542,13 @@ export async function changeJobStatus(formData: FormData) {
 }
 
 export async function resolveManualAttention(formData: FormData) {
-  await new PublishRepository(prisma).resolveManualAttention(id.parse(formData.get("publishJobId")));
-  refresh("/queue", "/review", "/");
+  try {
+    await new PublishRepository(prisma).resolveManualAttention(id.parse(formData.get("publishJobId")));
+    refresh("/queue", "/review", "/");
+    redirectWithNotice("/queue", "Item returned to review.");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 export async function recoverIncorrectPublishedPost(formData: FormData) {
@@ -570,17 +630,25 @@ export async function processPendingDownloads(formData?: FormData) {
 }
 
 export async function bulkRetryDownloads(formData: FormData) {
-  const jobIds = z.array(id).min(1).parse(formData.getAll("jobId"));
-  const repository = new DownloadRepository(prisma);
-  await Promise.all(jobIds.map((jobId) => repository.requestNow(jobId)));
-  refresh("/queue", "/downloads");
+  try {
+    const jobIds = z.array(id).min(1).parse(formData.getAll("jobId"));
+    const repository = new DownloadRepository(prisma);
+    await Promise.all(jobIds.map((jobId) => repository.requestNow(jobId)));
+    refresh("/queue", "/downloads");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 export async function bulkDownloadNow(formData: FormData) {
-  await bulkRetryDownloads(formData);
-  await triggerPendingDownloads();
-  refresh("/", "/queue", "/downloads");
-  redirectWithNotice("/queue", "Downloads started in the background. You can keep browsing — progress shows below.");
+  try {
+    await bulkRetryDownloads(formData);
+    await triggerPendingDownloads();
+    refresh("/", "/queue", "/downloads");
+    redirectWithNotice("/queue", "Downloads started in the background. You can keep browsing — progress shows below.");
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 export async function removeMedia(formData: FormData) {
@@ -640,10 +708,15 @@ export async function fetchPostPerformance(formData: FormData) {
 }
 
 export async function downloadAgain(formData: FormData) {
-  const sourcePostId = id.parse(formData.get("sourcePostId"));
-  const job = await prisma.downloadJob.findUniqueOrThrow({ where: { sourcePostId }, select: { id: true } });
-  await new DownloadRepository(prisma).requestNow(job.id);
-  refresh("/downloads", "/queue", "/");
+  try {
+    const sourcePostId = id.parse(formData.get("sourcePostId"));
+    const job = await prisma.downloadJob.findUniqueOrThrow({ where: { sourcePostId }, select: { id: true } });
+    await new DownloadRepository(prisma).requestNow(job.id);
+    refresh("/downloads", "/queue", "/");
+    redirectWithNotice("/downloads", "Download re-queued.");
+  } catch (error) {
+    redirectWithErrorNotice("/downloads", error);
+  }
 }
 
 export async function sendToReview(formData: FormData) {
@@ -663,21 +736,35 @@ export async function sendToReview(formData: FormData) {
 }
 
 export async function sendAllToReview() {
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  await new SchedulerRepository(prisma).scheduleDownloadedAssets(new Date(), 0, (source) => resolveCaption(source, config.captionTemplates));
-  refresh("/downloads", "/review", "/queue", "/");
+  try {
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    await new SchedulerRepository(prisma).scheduleDownloadedAssets(new Date(), 0, (source) => resolveCaption(source, config.captionTemplates));
+    refresh("/downloads", "/review", "/queue", "/");
+    redirectWithNotice("/downloads", "Downloaded posts were queued for review.");
+  } catch (error) {
+    redirectWithErrorNotice("/downloads", error);
+  }
 }
 
 export async function returnToDownloads(formData: FormData) {
-  const publishJobId = id.parse(formData.get("publishJobId"));
-  await new PublishRepository(prisma).returnToDownloads(publishJobId);
-  refresh("/downloads", "/review", "/queue", "/");
+  try {
+    const publishJobId = id.parse(formData.get("publishJobId"));
+    await new PublishRepository(prisma).returnToDownloads(publishJobId);
+    refresh("/downloads", "/review", "/queue", "/");
+    redirectWithNotice("/review", "Item returned to Downloads.");
+  } catch (error) {
+    redirectWithErrorNotice("/review", error);
+  }
 }
 
 export async function bulkDownloadAction(formData: FormData) {
-  const operation = z.enum(["retry", "download"]).parse(formData.get("operation"));
-  if (operation === "retry") await bulkRetryDownloads(formData);
-  else await bulkDownloadNow(formData);
+  try {
+    const operation = z.enum(["retry", "download"]).parse(formData.get("operation"));
+    if (operation === "retry") await bulkRetryDownloads(formData);
+    else await bulkDownloadNow(formData);
+  } catch (error) {
+    redirectWithErrorNotice("/queue", error);
+  }
 }
 
 const browserRole = z.enum(["collector", "publisher"]);
@@ -689,40 +776,50 @@ function browserSessionKeys(role: "collector" | "publisher"): string[] {
 }
 
 export async function saveBrowserBinding(formData: FormData) {
-  const role = browserRole.parse(formData.get("role"));
-  const selectedId = browserId.parse(formData.get("browserId"));
-  const lock = await prisma.schedulerLock.findUnique({ where: { name: `x-${role}-profile` } });
-  if (lock && lock.lockedUntil > new Date()) throw new Error(`The ${role} browser is busy. Wait for it to finish before changing browsers.`);
-  let executablePath: string;
-  if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
-  else {
-    const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
-    if (!installation) throw new Error("That browser is not currently detected on this device.");
-    executablePath = installation.executablePath;
+  try {
+    const role = browserRole.parse(formData.get("role"));
+    const selectedId = browserId.parse(formData.get("browserId"));
+    const lock = await prisma.schedulerLock.findUnique({ where: { name: `x-${role}-profile` } });
+    if (lock && lock.lockedUntil > new Date()) throw new Error(`The ${role} browser is busy. Wait for it to finish before changing browsers.`);
+    let executablePath: string;
+    if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
+    else {
+      const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
+      if (!installation) throw new Error("That browser is not currently detected on this device.");
+      executablePath = installation.executablePath;
+    }
+    executablePath = await validateChromiumExecutable(executablePath);
+    const prefix = role === "collector" ? "DEVICE_COLLECTOR" : "DEVICE_PUBLISHER";
+    const settings = new SettingsRepository(prisma);
+    await settings.setMany({ [`${prefix}_BROWSER_ID`]: selectedId, [`${prefix}_BROWSER_EXECUTABLE`]: executablePath });
+    await settings.deleteMany(browserSessionKeys(role));
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", "Browser binding saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
   }
-  executablePath = await validateChromiumExecutable(executablePath);
-  const prefix = role === "collector" ? "DEVICE_COLLECTOR" : "DEVICE_PUBLISHER";
-  const settings = new SettingsRepository(prisma);
-  await settings.setMany({ [`${prefix}_BROWSER_ID`]: selectedId, [`${prefix}_BROWSER_EXECUTABLE`]: executablePath });
-  await settings.deleteMany(browserSessionKeys(role));
-  refresh("/settings", "/");
 }
 
 export async function openBrowserLogin(formData: FormData) {
-  const role = browserRole.parse(formData.get("role"));
-  const settings = new SettingsRepository(prisma);
-  const stored = await settings.getAll();
-  const config = applyStoredSettings(loadConfig(), stored);
-  const selectedBrowserId = role === "collector" ? config.collectorBrowserId : config.publisherBrowserId;
-  const executablePath = (role === "collector" ? config.collectorBrowserExecutablePath : config.publisherBrowserExecutablePath)
-    ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedBrowserId)?.executablePath;
-  const profilePath = role === "collector" ? config.playwrightProfilePath : config.publisherProfilePath;
-  const profileDirectory = role === "collector" ? config.playwrightProfileDirectory : config.publisherProfileDirectory;
-  if (!executablePath) throw new Error(`Select the ${role} browser before opening its login profile.`);
-  await settings.deleteMany(browserSessionKeys(role));
-  await mkdir(profilePath, { recursive: true });
-  await openChromiumProfile(executablePath, profilePath, profileDirectory);
-  refresh("/settings", "/");
+  try {
+    const role = browserRole.parse(formData.get("role"));
+    const settings = new SettingsRepository(prisma);
+    const stored = await settings.getAll();
+    const config = applyStoredSettings(loadConfig(), stored);
+    const selectedBrowserId = role === "collector" ? config.collectorBrowserId : config.publisherBrowserId;
+    const executablePath = (role === "collector" ? config.collectorBrowserExecutablePath : config.publisherBrowserExecutablePath)
+      ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedBrowserId)?.executablePath;
+    const profilePath = role === "collector" ? config.playwrightProfilePath : config.publisherProfilePath;
+    const profileDirectory = role === "collector" ? config.playwrightProfileDirectory : config.publisherProfileDirectory;
+    if (!executablePath) throw new Error(`Select the ${role} browser before opening its login profile.`);
+    await settings.deleteMany(browserSessionKeys(role));
+    await mkdir(profilePath, { recursive: true });
+    await openChromiumProfile(executablePath, profilePath, profileDirectory);
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", "Login profile opened. Sign in to X, then check the session.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function checkBrowserSession(formData: FormData) {
@@ -751,103 +848,133 @@ export async function checkBrowserSession(formData: FormData) {
 
 export async function resetBrowserProfile(formData: FormData) {
   await requireRecentAuth();
-  const role = browserRole.parse(formData.get("role"));
-  const settings = new SettingsRepository(prisma);
-  const config = applyStoredSettings(loadConfig(), await settings.getAll());
-  const profilePath = role === "collector" ? config.playwrightProfilePath : config.publisherProfilePath;
-  if (!inside(resolve(config.repositoryRoot, "storage", "browser-profiles"), profilePath)) throw new Error("Only dashboard-managed browser profiles can be reset.");
-  const lock = await prisma.schedulerLock.findUnique({ where: { name: `x-${role}-profile` } });
-  if (lock && lock.lockedUntil > new Date()) throw new Error(`The ${role} browser is busy.`);
-  await rm(profilePath, { recursive: true, force: true });
-  await settings.deleteMany(browserSessionKeys(role));
-  refresh("/settings", "/");
+  try {
+    const role = browserRole.parse(formData.get("role"));
+    const settings = new SettingsRepository(prisma);
+    const config = applyStoredSettings(loadConfig(), await settings.getAll());
+    const profilePath = role === "collector" ? config.playwrightProfilePath : config.publisherProfilePath;
+    if (!inside(resolve(config.repositoryRoot, "storage", "browser-profiles"), profilePath)) throw new Error("Only dashboard-managed browser profiles can be reset.");
+    const lock = await prisma.schedulerLock.findUnique({ where: { name: `x-${role}-profile` } });
+    if (lock && lock.lockedUntil > new Date()) throw new Error(`The ${role} browser is busy.`);
+    await rm(profilePath, { recursive: true, force: true });
+    await settings.deleteMany(browserSessionKeys(role));
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", `${role === "collector" ? "Collector" : "Publisher"} profile deleted. A new login is required.`);
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function createBrowserIdentity(formData: FormData) {
-  const role = z.enum(["COLLECTOR", "PUBLISHER"]).parse(formData.get("role"));
-  const selectedId = browserId.parse(formData.get("browserId"));
-  let executablePath: string;
-  if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
-  else {
-    const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
-    if (!installation) throw new Error("That browser is not currently detected on this device.");
-    executablePath = installation.executablePath;
+  try {
+    const role = z.enum(["COLLECTOR", "PUBLISHER"]).parse(formData.get("role"));
+    const selectedId = browserId.parse(formData.get("browserId"));
+    let executablePath: string;
+    if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
+    else {
+      const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
+      if (!installation) throw userError("That browser is not currently detected on this device.");
+      executablePath = installation.executablePath;
+    }
+    try {
+      executablePath = await validateChromiumExecutable(executablePath);
+    } catch (error) {
+      throw userError(error instanceof Error ? error.message : "Choose an existing Chromium browser executable.", "VALIDATION", error);
+    }
+    const config = loadConfig();
+    const identityRepository = new BrowserIdentityRepository(prisma);
+    const identityCount = await prisma.browserIdentity.count({ where: { role } });
+    const identity = await identityRepository.create({
+      role,
+      label: `${role === "COLLECTOR" ? "Collector" : "Publisher"} ${identityCount + 1}`,
+      browserId: selectedId,
+      executablePath,
+      profileRoot: resolve(config.repositoryRoot, "storage", "browser-profiles"),
+    });
+    const profilePath = resolve(config.repositoryRoot, identity.profilePath);
+    await mkdir(profilePath, { recursive: true });
+    await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
+    refresh("/settings", "/sources", "/review", "/");
+    redirectWithNotice("/settings", "Browser identity created. Sign in to X in the opened browser, close it completely, then verify the identity.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
   }
-  executablePath = await validateChromiumExecutable(executablePath);
-  const config = loadConfig();
-  const identityRepository = new BrowserIdentityRepository(prisma);
-  const identityCount = await prisma.browserIdentity.count({ where: { role } });
-  const identity = await identityRepository.create({
-    role,
-    label: `${role === "COLLECTOR" ? "Collector" : "Publisher"} ${identityCount + 1}`,
-    browserId: selectedId,
-    executablePath,
-    profileRoot: resolve(config.repositoryRoot, "storage", "browser-profiles"),
-  });
-  const profilePath = resolve(config.repositoryRoot, identity.profilePath);
-  await mkdir(profilePath, { recursive: true });
-  await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
-  refresh("/settings", "/sources", "/review", "/");
-  redirectWithNotice("/settings", "Browser identity created. Sign in to X in the opened browser, close it completely, then verify the identity.");
 }
 
 export async function openIdentityLogin(formData: FormData) {
-  const identityId = id.parse(formData.get("identityId"));
-  const repository = new BrowserIdentityRepository(prisma);
-  const identity = await repository.find(identityId);
-  if (!identity || !identity.enabled) throw new Error("This browser identity is unavailable.");
-  const activeLock = await prisma.schedulerLock.findUnique({ where: { name: identityLeaseName(identity.id) } });
-  if (activeLock && activeLock.lockedUntil > new Date()) throw new Error("This identity is busy with another browser operation.");
-  const executablePath = identity.executablePath ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === identity.browserId)?.executablePath;
-  if (!executablePath) throw new Error("The configured browser executable was not found.");
-  await repository.clearVerification(identity.id);
-  const profilePath = resolve(loadConfig().repositoryRoot, identity.profilePath);
-  await mkdir(profilePath, { recursive: true });
-  await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
-  refresh("/settings", "/");
-  redirectWithNotice("/settings", `Profile opened. Sign in as ${identity.expectedUsername ? `@${identity.expectedUsername}` : identity.label}, close the browser completely, then verify this identity.`);
+  try {
+    const identityId = id.parse(formData.get("identityId"));
+    const repository = new BrowserIdentityRepository(prisma);
+    const identity = await repository.find(identityId);
+    if (!identity || !identity.enabled) throw userError("This browser identity is unavailable.", "NOT_FOUND");
+    const activeLock = await prisma.schedulerLock.findUnique({ where: { name: identityLeaseName(identity.id) } });
+    if (activeLock && activeLock.lockedUntil > new Date()) throw userError("This identity is busy with another browser operation.", "RESOURCE_BUSY");
+    const executablePath = identity.executablePath ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === identity.browserId)?.executablePath;
+    if (!executablePath) throw userError("The configured browser executable was not found.");
+    await repository.clearVerification(identity.id);
+    const profilePath = resolve(loadConfig().repositoryRoot, identity.profilePath);
+    await mkdir(profilePath, { recursive: true });
+    await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", `Profile opened. Sign in as ${identity.expectedUsername ? `@${identity.expectedUsername}` : identity.label}, close the browser completely, then verify this identity.`);
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function addIdentityProfile(formData: FormData) {
-  const identityId = id.parse(formData.get("identityId"));
-  const expectedUsername = username.parse(formData.get("expectedUsername"));
-  const repository = new BrowserIdentityRepository(prisma);
-  const identity = await repository.find(identityId);
-  if (!identity || !identity.enabled) throw new Error("This browser identity is unavailable.");
-  const activeLock = await prisma.schedulerLock.findUnique({ where: { name: identityLeaseName(identity.id) } });
-  if (activeLock && activeLock.lockedUntil > new Date()) throw new Error("This identity is busy with another browser operation.");
-  const executablePath = identity.executablePath ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === identity.browserId)?.executablePath;
-  if (!executablePath) throw new Error("The configured browser executable was not found. Choose another browser in technical settings.");
-  await prisma.browserIdentity.update({ where: { id: identity.id }, data: { expectedUsername: expectedUsername.toLowerCase(), verifiedAt: null, verifiedUsername: null, verifiedFingerprint: null, verificationError: null, profileDeletedAt: null } });
-  const profilePath = resolve(loadConfig().repositoryRoot, identity.profilePath);
-  await mkdir(profilePath, { recursive: true });
-  await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
-  refresh("/settings", "/");
-  redirectWithNotice("/settings", `Profile opened. Sign in as @${expectedUsername}, close the browser completely, then verify this identity.`);
+  try {
+    const identityId = id.parse(formData.get("identityId"));
+    const expectedUsername = username.parse(formData.get("expectedUsername"));
+    const repository = new BrowserIdentityRepository(prisma);
+    const identity = await repository.find(identityId);
+    if (!identity || !identity.enabled) throw userError("This browser identity is unavailable.", "NOT_FOUND");
+    const activeLock = await prisma.schedulerLock.findUnique({ where: { name: identityLeaseName(identity.id) } });
+    if (activeLock && activeLock.lockedUntil > new Date()) throw userError("This identity is busy with another browser operation.", "RESOURCE_BUSY");
+    const executablePath = identity.executablePath ?? (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === identity.browserId)?.executablePath;
+    if (!executablePath) throw userError("The configured browser executable was not found. Choose another browser in technical settings.");
+    await prisma.browserIdentity.update({ where: { id: identity.id }, data: { expectedUsername: expectedUsername.toLowerCase(), verifiedAt: null, verifiedUsername: null, verifiedFingerprint: null, verificationError: null, profileDeletedAt: null } });
+    const profilePath = resolve(loadConfig().repositoryRoot, identity.profilePath);
+    await mkdir(profilePath, { recursive: true });
+    await openChromiumProfile(executablePath, profilePath, identity.profileDirectory ?? undefined);
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", `Profile opened. Sign in as @${expectedUsername}, close the browser completely, then verify this identity.`);
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function updateIdentityBrowser(formData: FormData) {
-  const identityId = id.parse(formData.get("identityId"));
-  const selectedId = browserId.parse(formData.get("browserId"));
-  let executablePath: string;
-  if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
-  else {
-    const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
-    if (!installation) throw new Error("That browser is not currently detected on this device.");
-    executablePath = installation.executablePath;
+  try {
+    const identityId = id.parse(formData.get("identityId"));
+    const selectedId = browserId.parse(formData.get("browserId"));
+    let executablePath: string;
+    if (selectedId === "custom") executablePath = z.string().trim().min(1, "Enter the custom browser executable path.").parse(formData.get("customExecutablePath"));
+    else {
+      const installation = (await discoverInstalledChromiumBrowsers()).find((browser) => browser.id === selectedId);
+      if (!installation) throw userError("That browser is not currently detected on this device.");
+      executablePath = installation.executablePath;
+    }
+    try {
+      executablePath = await validateChromiumExecutable(executablePath);
+    } catch (error) {
+      throw userError(error instanceof Error ? error.message : "Choose an existing Chromium browser executable.", "VALIDATION", error);
+    }
+    const config = loadConfig();
+    const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identityId), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+    await lease.run(() => new BrowserIdentityRepository(prisma).updateBinding(identityId, selectedId, executablePath));
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", "Identity browser saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
   }
-  executablePath = await validateChromiumExecutable(executablePath);
-  const config = loadConfig();
-  const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identityId), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-  await lease.run(() => new BrowserIdentityRepository(prisma).updateBinding(identityId, selectedId, executablePath));
-  refresh("/settings", "/");
 }
 
 export async function checkIdentitySession(formData: FormData) {
   const identityId = id.parse(formData.get("identityId"));
   const repository = new BrowserIdentityRepository(prisma);
   const identity = await repository.find(identityId);
-  if (!identity) throw new Error("This browser identity is not configured.");
+  if (!identity) throw userError("This browser identity is not configured.", "NOT_FOUND");
   const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
   const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
   const profilePath = resolve(config.repositoryRoot, identity.profilePath);
@@ -857,77 +984,111 @@ export async function checkIdentitySession(formData: FormData) {
       ? await new PlaywrightTimelineBrowser({ headless: false, browserId: identity.browserId as typeof config.collectorBrowserId, browserExecutablePath: identity.executablePath ?? undefined, repositoryRoot: config.repositoryRoot, profileDirectory: profilePath, browserProfileDirectory: identity.profileDirectory ?? undefined, lease, diagnosticsDirectory: config.logStoragePath }, logger).checkSession()
       : await new XPlaywrightPublisher({ repositoryRoot: config.repositoryRoot, profileDirectory: profilePath, browserId: identity.browserId as typeof config.publisherBrowserId, browserExecutablePath: identity.executablePath ?? undefined, browserProfileDirectory: identity.profileDirectory ?? undefined, lease, diagnosticsDirectory: config.logStoragePath, headless: false }, logger).checkSession();
     const normalizedAccount = account?.replace(/^@/, "").toLowerCase();
-    if (!normalizedAccount) throw new Error("The active X username could not be detected.");
-    if (identity.expectedUsername && normalizedAccount !== identity.expectedUsername) throw new Error(`This profile is signed into @${normalizedAccount}, not @${identity.expectedUsername}.`);
+    if (!normalizedAccount) throw userError("The active X username could not be detected.");
+    if (identity.expectedUsername && normalizedAccount !== identity.expectedUsername) throw userError(`This profile is signed into @${normalizedAccount}, not @${identity.expectedUsername}.`);
     await repository.setVerification(identity.id, normalizedAccount, identityFingerprint(identity));
   } catch (error) {
-    const detail = error instanceof Error ? error.message.split("\n").find((line) => line.trim())?.trim() : null;
-    await repository.setVerificationError(identity.id, error instanceof ResourceBusyError ? "Close this identity's browser window, then verify again." : detail || "Session verification failed.");
+    const detail = error instanceof ResourceBusyError
+      ? "Close this identity's browser window and any background browser processes, then verify again."
+      : error instanceof AppError
+        ? error.userMessage
+        : error instanceof Error
+          ? error.message.split("\n").find((line) => line.trim())?.trim()
+          : null;
+    await repository.setVerificationError(identity.id, detail || "Session verification failed.");
   }
   refresh("/settings", "/");
 }
 
 export async function toggleBrowserIdentity(formData: FormData) {
-  const identityId = id.parse(formData.get("identityId"));
-  const enabled = z.enum(["true", "false"]).transform((value) => value === "true").parse(formData.get("enabled"));
-  await new BrowserIdentityRepository(prisma).setEnabled(identityId, enabled);
-  refresh("/settings", "/sources", "/review", "/");
+  try {
+    const identityId = id.parse(formData.get("identityId"));
+    const enabled = z.enum(["true", "false"]).transform((value) => value === "true").parse(formData.get("enabled"));
+    await new BrowserIdentityRepository(prisma).setEnabled(identityId, enabled);
+    refresh("/settings", "/sources", "/review", "/");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function toggleIdentityAutomatic(formData: FormData) {
-  const identityId = id.parse(formData.get("identityId"));
-  const automatic = z.enum(["true", "false"]).transform((value) => value === "true").parse(formData.get("automatic"));
-  await new BrowserIdentityRepository(prisma).setAutomatic(identityId, automatic);
-  refresh("/settings", "/");
+  try {
+    const identityId = id.parse(formData.get("identityId"));
+    const automatic = z.enum(["true", "false"]).transform((value) => value === "true").parse(formData.get("automatic"));
+    await new BrowserIdentityRepository(prisma).setAutomatic(identityId, automatic);
+    refresh("/settings", "/");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function updateIdentityDailyLimit(formData: FormData) {
-  const identityId = id.parse(formData.get("identityId"));
-  const rawLimit = String(formData.get("dailyPostLimit") ?? "").trim();
-  const dailyPostLimit = rawLimit === "" ? null : z.coerce.number().int().min(1).max(200).parse(rawLimit);
-  await prisma.browserIdentity.update({ where: { id: identityId }, data: { dailyPostLimit } });
-  refresh("/settings", "/");
+  try {
+    const identityId = id.parse(formData.get("identityId"));
+    const rawLimit = String(formData.get("dailyPostLimit") ?? "").trim();
+    const dailyPostLimit = rawLimit === "" ? null : z.coerce.number().int().min(1).max(200).parse(rawLimit);
+    await prisma.browserIdentity.update({ where: { id: identityId }, data: { dailyPostLimit } });
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", "Daily post limit saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
+}
+
+function profileRemovalError(error?: string): AppError {
+  if (error && isFileLockError(error)) {
+    return userError("This browser profile is still in use by a running browser (including background processes). Close all browser windows and quit it completely, then try again.", "RESOURCE_BUSY");
+  }
+  return userError(error ?? "The browser profile could not be fully deleted.");
 }
 
 export async function deleteIdentityProfile(formData: FormData) {
   await requireRecentAuth();
-  const identityId = id.parse(formData.get("identityId"));
-  const repository = new BrowserIdentityRepository(prisma);
-  const identity = await repository.find(identityId);
-  if (!identity) throw new Error("Browser identity no longer exists.");
-  const config = loadConfig();
-  const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-  const managedRoleRoot = resolve(config.repositoryRoot, "storage", "browser-profiles", identity.role === "COLLECTOR" ? "collector" : "publisher");
-  if (!inside(managedRoleRoot, resolve(config.repositoryRoot, identity.profilePath))) throw new Error("Legacy browser profiles are preserved and cannot be deleted from this action. Create a managed identity or remove the legacy profile manually.");
-  const result = await lease.run(() => new BrowserProfileRemovalService(config.repositoryRoot).removeIdentity(identity.role === "COLLECTOR" ? "collector" : "publisher", basename(identity.profilePath)));
-  if (result.status === "failed" || result.status === "residual") throw new Error(result.error ?? "The browser profile could not be fully deleted.");
-  await repository.clearVerification(identity.id, new Date());
-  await prisma.browserIdentity.update({ where: { id: identity.id }, data: { expectedUsername: null, enabled: false, automaticEnabled: false } });
-  refresh("/settings", "/");
-  redirectWithNotice("/settings", `Browser profile for ${identity.label} deleted. Its local cookies and X session were removed.`);
+  try {
+    const identityId = id.parse(formData.get("identityId"));
+    const repository = new BrowserIdentityRepository(prisma);
+    const identity = await repository.find(identityId);
+    if (!identity) throw userError("Browser identity no longer exists.", "NOT_FOUND");
+    const config = loadConfig();
+    const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+    const managedRoleRoot = resolve(config.repositoryRoot, "storage", "browser-profiles", identity.role === "COLLECTOR" ? "collector" : "publisher");
+    if (!inside(managedRoleRoot, resolve(config.repositoryRoot, identity.profilePath))) throw userError("Legacy browser profiles are preserved and cannot be deleted from this action. Create a managed identity or remove the legacy profile manually.");
+    const result = await lease.run(() => new BrowserProfileRemovalService(config.repositoryRoot).removeIdentity(identity.role === "COLLECTOR" ? "collector" : "publisher", basename(identity.profilePath)));
+    if (result.status === "failed" || result.status === "residual") throw profileRemovalError(result.error);
+    await repository.clearVerification(identity.id, new Date());
+    await prisma.browserIdentity.update({ where: { id: identity.id }, data: { expectedUsername: null, enabled: false, automaticEnabled: false } });
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", `Browser profile for ${identity.label} deleted. Its local cookies and X session were removed.`);
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function deleteIdentityPermanently(formData: FormData) {
   await requireRecentAuth();
-  const identityId = id.parse(formData.get("identityId"));
-  const confirmation = z.string().parse(formData.get("confirmation")).trim();
-  const repository = new BrowserIdentityRepository(prisma);
-  const identity = await repository.find(identityId);
-  if (!identity) throw new Error("Browser identity no longer exists.");
-  if (confirmation !== `DELETE ${identity.label}`) throw new Error(`Type DELETE ${identity.label} to confirm.`);
-  const config = loadConfig();
-  const activeWork = await prisma.publishJob.count({ where: { publisherIdentityId: identityId, status: "RUNNING" } });
-  if (activeWork > 0) throw new Error("This identity has running publication work. Stop it before deleting.");
-  const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
-  const removal = await lease.run(() => new BrowserProfileRemovalService(config.repositoryRoot).removeIdentity(identity.role === "COLLECTOR" ? "collector" : "publisher", basename(identity.profilePath)));
-  if (removal.status === "failed" || removal.status === "residual") throw new Error(removal.error ?? "The browser profile could not be fully deleted.");
-  await prisma.$transaction([
-    prisma.publishJob.updateMany({ where: { publisherIdentityId: identityId }, data: { publisherIdentityId: null } }),
-    prisma.schedulerLock.deleteMany({ where: { name: identityLeaseName(identityId) } }),
-    prisma.browserIdentity.delete({ where: { id: identityId } }),
-  ]);
-  refresh("/settings", "/", "/queue", "/review", "/published");
-  redirectWithNotice("/settings", `${identity.label} permanently deleted. Its profile files were removed and its work was detached.`);
+  try {
+    const identityId = id.parse(formData.get("identityId"));
+    const confirmation = z.string().parse(formData.get("confirmation")).trim();
+    const repository = new BrowserIdentityRepository(prisma);
+    const identity = await repository.find(identityId);
+    if (!identity) throw userError("Browser identity no longer exists.", "NOT_FOUND");
+    if (confirmation !== `DELETE ${identity.label}`) throw userError(`Type DELETE ${identity.label} to confirm.`);
+    const config = loadConfig();
+    const activeWork = await prisma.publishJob.count({ where: { publisherIdentityId: identityId, status: "RUNNING" } });
+    if (activeWork > 0) throw userError("This identity has running publication work. Stop it before deleting.", "RESOURCE_BUSY");
+    const lease = new DatabaseExclusiveLease(new SchedulerRepository(prisma), identityLeaseName(identity.id), Math.max(config.workerLockTimeoutMinutes, 10) * 60_000);
+    const removal = await lease.run(() => new BrowserProfileRemovalService(config.repositoryRoot).removeIdentity(identity.role === "COLLECTOR" ? "collector" : "publisher", basename(identity.profilePath)));
+    if (removal.status === "failed" || removal.status === "residual") throw profileRemovalError(removal.error);
+    await prisma.$transaction([
+      prisma.publishJob.updateMany({ where: { publisherIdentityId: identityId }, data: { publisherIdentityId: null } }),
+      prisma.schedulerLock.deleteMany({ where: { name: identityLeaseName(identityId) } }),
+      prisma.browserIdentity.delete({ where: { id: identityId } }),
+    ]);
+    refresh("/settings", "/", "/queue", "/review", "/published");
+    redirectWithNotice("/settings", `${identity.label} permanently deleted. Its profile files were removed and its work was detached.`);
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 async function withIdentityLeases<T>(identityIds: string[], operation: () => Promise<T>): Promise<T> {
@@ -939,42 +1100,56 @@ async function withIdentityLeases<T>(identityIds: string[], operation: () => Pro
 
 export async function clearAllBrowserProfiles(formData: FormData) {
   await requireRecentAuth();
-  if (z.string().parse(formData.get("confirmation")).trim() !== "DELETE ALL PROFILES") throw new Error('Type "DELETE ALL PROFILES" to confirm.');
-  const identities = await prisma.browserIdentity.findMany({ select: { id: true } });
-  const outcomes = await withIdentityLeases(identities.map((identity) => identity.id), () => new BrowserProfileRemovalService(loadConfig().repositoryRoot).clearAll());
-  const failed = outcomes.filter((outcome) => outcome.status === "failed" || outcome.status === "residual");
-  if (failed.length > 0) throw new Error(`Some browser profiles could not be deleted: ${failed.map((outcome) => outcome.role).join(", ")}`);
-  await prisma.browserIdentity.updateMany({ data: { expectedUsername: null, verifiedUsername: null, verifiedAt: null, verifiedFingerprint: null, verificationError: null, profileDeletedAt: new Date(), enabled: false, automaticEnabled: false } });
-  await new SettingsRepository(prisma).deleteMany([...browserSessionKeys("collector"), ...browserSessionKeys("publisher")]);
-  refresh("/settings", "/");
-  redirectWithNotice("/settings", `All managed browser profiles were deleted. ${identities.length} identities were preserved and now require login and verification.`);
+  try {
+    if (z.string().parse(formData.get("confirmation")).trim() !== "DELETE ALL PROFILES") throw userError('Type "DELETE ALL PROFILES" to confirm.');
+    const identities = await prisma.browserIdentity.findMany({ select: { id: true } });
+    const outcomes = await withIdentityLeases(identities.map((identity) => identity.id), () => new BrowserProfileRemovalService(loadConfig().repositoryRoot).clearAll());
+    const failed = outcomes.filter((outcome) => outcome.status === "failed" || outcome.status === "residual");
+    if (failed.length > 0) {
+      const locked = failed.find((outcome) => outcome.error && isFileLockError(outcome.error));
+      if (locked) throw profileRemovalError(locked.error);
+      throw userError(`Some browser profiles could not be deleted: ${failed.map((outcome) => outcome.role).join(", ")}`);
+    }
+    await prisma.browserIdentity.updateMany({ data: { expectedUsername: null, verifiedUsername: null, verifiedAt: null, verifiedFingerprint: null, verificationError: null, profileDeletedAt: new Date(), enabled: false, automaticEnabled: false } });
+    await new SettingsRepository(prisma).deleteMany([...browserSessionKeys("collector"), ...browserSessionKeys("publisher")]);
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", `All managed browser profiles were deleted. ${identities.length} identities were preserved and now require login and verification.`);
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function assignSourceCollector(formData: FormData) {
-  const sourceId = id.parse(formData.get("sourceId"));
-  const raw = formData.get("collectorIdentityId");
-  const collectorIdentityId = raw === null || String(raw).trim() === "" ? null : id.parse(raw);
-  if (collectorIdentityId) {
-    const collector = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR" } });
-    if (!collector) throw new Error("Choose an existing Collector identity.");
+  try {
+    const sourceId = id.parse(formData.get("sourceId"));
+    const raw = formData.get("collectorIdentityId");
+    const collectorIdentityId = raw === null || String(raw).trim() === "" ? null : id.parse(raw);
+    if (collectorIdentityId) {
+      const collector = await prisma.browserIdentity.findFirst({ where: { id: collectorIdentityId, role: "COLLECTOR" } });
+      if (!collector) throw new Error("Choose an existing Collector identity.");
+    }
+    await prisma.sourceAccount.update({ where: { id: sourceId }, data: { collectorIdentityId } });
+    refresh("/sources");
+    redirectWithNotice("/sources", "Collector assignment saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/sources", error);
   }
-  await prisma.sourceAccount.update({ where: { id: sourceId }, data: { collectorIdentityId } });
-  refresh("/sources");
 }
 
 export async function saveSettings(formData: FormData) {
-  const timezone = z.string().min(1).parse(formData.get("timezone"));
-  try { new Intl.DateTimeFormat("en", { timeZone: timezone }); } catch { throw new Error("Enter a valid IANA timezone such as Asia/Jakarta."); }
+  try {
+    const timezone = z.string().min(1).parse(formData.get("timezone"));
+    try { new Intl.DateTimeFormat("en", { timeZone: timezone }); } catch { throw userError("Enter a valid IANA timezone such as Asia/Jakarta."); }
   const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/;
   const starts = formData.getAll("scheduleActiveStart").map(String).filter(Boolean);
   const ends = formData.getAll("scheduleActiveEnd").map(String).filter(Boolean);
-  if (starts.length === 0 || starts.length !== ends.length) throw new Error("Each active window needs a start and end time.");
-  if (starts.length > 2) throw new Error("At most 2 active windows are supported.");
+  if (starts.length === 0 || starts.length !== ends.length) throw userError("Each active window needs a start and end time.");
+  if (starts.length > 2) throw userError("At most 2 active windows are supported.");
   const windows: Array<{ start: string; end: string }> = [];
   for (let i = 0; i < starts.length; i += 1) {
-    if (!timeRe.test(starts[i])) throw new Error(`Window ${i + 1} start must be HH:MM.`);
-    if (!timeRe.test(ends[i])) throw new Error(`Window ${i + 1} end must be HH:MM.`);
-    if (starts[i] === ends[i]) throw new Error(`Window ${i + 1} start and end must be different times.`);
+    if (!timeRe.test(starts[i])) throw userError(`Window ${i + 1} start must be HH:MM.`);
+    if (!timeRe.test(ends[i])) throw userError(`Window ${i + 1} end must be HH:MM.`);
+    if (starts[i] === ends[i]) throw userError(`Window ${i + 1} start and end must be different times.`);
     windows.push({ start: starts[i], end: ends[i] });
   }
   if (windows.length === 2) {
@@ -983,7 +1158,7 @@ export async function saveSettings(formData: FormData) {
     const aEnd = toMin(windows[0].end) <= aStart ? toMin(windows[0].end) + 1440 : toMin(windows[0].end);
     const bStart = toMin(windows[1].start);
     const bEnd = toMin(windows[1].end) <= bStart ? toMin(windows[1].end) + 1440 : toMin(windows[1].end);
-    if (aStart < bEnd && bStart < aEnd) throw new Error("Active windows must not overlap.");
+    if (aStart < bEnd && bStart < aEnd) throw userError("Active windows must not overlap.");
   }
   const values = {
     COLLECTION_INTERVAL_MINUTES: String(z.coerce.number().int().min(1).max(59).parse(formData.get("collectionIntervalMinutes"))),
@@ -1005,39 +1180,61 @@ export async function saveSettings(formData: FormData) {
     SCHEDULE_MIN_GAP_MINUTES: String(z.coerce.number().int().min(0).max(180).parse(formData.get("scheduleMinGapMinutes"))),
     APP_TIMEZONE: timezone,
   };
-  await new SettingsRepository(prisma).setMany(values);
-  refresh("/settings", "/");
+    await new SettingsRepository(prisma).setMany(values);
+    refresh("/settings", "/");
+    redirectWithNotice("/settings", "Operations settings saved.");
+  } catch (error) {
+    const message = toUserMessage(error);
+    const field = /timezone/i.test(message) ? "timezone" : /window|HH:MM/i.test(message) ? "schedule" : undefined;
+    redirectWithErrorNotice("/settings", error, field);
+  }
 }
 
 export async function saveCaptionSettings(formData: FormData) {
-  const templates = z.string().max(10_000).parse(formData.get("captionTemplates"));
-  await new SettingsRepository(prisma).setMany({ CAPTION_TEMPLATES: templates });
-  refresh("/settings", "/review");
-  redirectWithNotice("/settings", "Caption settings saved.");
+  try {
+    const templates = z.string().max(10_000).parse(formData.get("captionTemplates"));
+    await new SettingsRepository(prisma).setMany({ CAPTION_TEMPLATES: templates });
+    refresh("/settings", "/review");
+    redirectWithNotice("/settings", "Caption settings saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function saveReviewSettings(formData: FormData) {
-  await new SettingsRepository(prisma).setMany({ REVIEW_VIDEO_PREVIEW_ENABLED: z.enum(["true", "false"]).parse(formData.get("videoPreviewEnabled")) });
-  refresh("/settings", "/review");
-  redirectWithNotice("/settings", "Review settings saved.");
+  try {
+    await new SettingsRepository(prisma).setMany({ REVIEW_VIDEO_PREVIEW_ENABLED: z.enum(["true", "false"]).parse(formData.get("videoPreviewEnabled")) });
+    refresh("/settings", "/review");
+    redirectWithNotice("/settings", "Review settings saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function saveNotificationSettings(formData: FormData) {
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const enabled = z.enum(["true", "false"]).parse(formData.get("notificationsEnabled"));
-  if (enabled === "true" && !config.discordBotToken) throw new Error("Add a Discord bot token to .env before enabling notifications.");
-  await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_ENABLED: enabled });
-  refresh("/settings");
-  redirectWithNotice("/settings", "Notification settings saved.");
+  try {
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const enabled = z.enum(["true", "false"]).parse(formData.get("notificationsEnabled"));
+    if (enabled === "true" && !config.discordBotToken) throw new Error("Add a Discord bot token to .env before enabling notifications.");
+    await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_ENABLED: enabled });
+    refresh("/settings");
+    redirectWithNotice("/settings", "Notification settings saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function saveDiscordNotificationSettings(formData: FormData) {
-  const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
-  const enabled = z.enum(["true", "false"]).parse(formData.get("discordNotificationsEnabled"));
-  if (enabled === "true" && (!config.discordBotToken || !config.discordOwnerId)) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env before enabling Discord notifications.");
-  await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_DISCORD_ENABLED: enabled });
-  refresh("/settings");
-  redirectWithNotice("/settings", "Discord notification settings saved.");
+  try {
+    const config = applyStoredSettings(loadConfig(), await new SettingsRepository(prisma).getAll());
+    const enabled = z.enum(["true", "false"]).parse(formData.get("discordNotificationsEnabled"));
+    if (enabled === "true" && (!config.discordBotToken || !config.discordOwnerId)) throw new Error("Set DISCORD_BOT_TOKEN and DISCORD_OWNER_ID in .env before enabling Discord notifications.");
+    await new SettingsRepository(prisma).setMany({ NOTIFICATIONS_DISCORD_ENABLED: enabled });
+    refresh("/settings");
+    redirectWithNotice("/settings", "Discord notification settings saved.");
+  } catch (error) {
+    redirectWithErrorNotice("/settings", error);
+  }
 }
 
 export async function sendDiscordTestNotification() {

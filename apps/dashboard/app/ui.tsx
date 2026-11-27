@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { loadConfig } from "@cenblu/config";
 import { logout } from "./actions";
-import { Navigation, RefreshButton, ThemeToggle, DownloadProgress, LiveRefresh, SubmitButton, type NavItem } from "./controls";
+import { Navigation, RefreshButton, ThemeToggle, DownloadProgress, LiveRefresh, SubmitButton, HeaderStatus, type NavItem } from "./controls";
 import { AUTH_COOKIE, authPassword, verifyAuthValue } from "./lib/auth";
 import { formatNumber } from "./lib/format";
 export { Badge, Empty, FlashNotice, FormMessage, Stat } from "./ui-primitives";
@@ -63,7 +63,7 @@ export async function Shell({ children, title, eyebrow, variant = "compact" }: {
       <main id="main-content" className={variant === "editorial" ? "main" : "main compact"}>
         <header className="page-head min-w-0 gap-5 max-[850px]:flex-col">
           <div className="page-title-group min-w-0"><p className="eyebrow">{eyebrow ?? "Cenblue / local pipeline"}</p><h1 className="[overflow-wrap:anywhere]">{title}<span aria-hidden="true">.</span></h1><p className="page-description [overflow-wrap:anywhere]">{pageDescriptions[title] ?? "A focused workspace for the local publishing pipeline."}</p></div>
-          <div className="head-actions min-w-0 flex-wrap max-[850px]:w-full">{signedIn && <form action={logout}><SubmitButton className="small-button" pending="Signing out…">Sign out</SubmitButton></form>}<ThemeToggle /><RefreshButton /><div className="head-status max-[850px]:hidden"><span className="pulse" aria-hidden="true" />Dashboard ready</div></div>
+          <div className="head-actions min-w-0 flex-wrap max-[850px]:w-full">{signedIn && <form action={logout}><SubmitButton className="small-button" pending="Signing out…">Sign out</SubmitButton></form>}<ThemeToggle /><RefreshButton /><HeaderStatus /></div>
         </header>
         <DownloadProgress />
         <LiveRefresh />

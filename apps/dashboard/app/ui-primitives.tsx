@@ -22,4 +22,4 @@ export function FlashNotice({ notice, tone = "success", children }: { notice?: s
   return <div className={className} role={normalized === "error" ? "alert" : "status"}>{notice}{notice && children ? " " : null}{children}</div>;
 }
 
-export function FormMessage({ children }: { children: React.ReactNode }) { return <p className="form-note">{children}</p>; }
+export function FormMessage({ children, tone = "info" }: { children: React.ReactNode; tone?: "info" | "error" }) { return <p className={tone === "error" ? "error-line" : "form-note"}>{children}</p>; }

@@ -116,6 +116,14 @@ export function CollectionProgress() {
   return null;
 }
 
+export function HeaderStatus() {
+  const status = useStatusPoll();
+  const collecting = status.collection?.active;
+  const downloading = status.downloads?.run;
+  const label = collecting?.status === "RUNNING" ? `Collecting ${collecting.completedSources}/${collecting.totalSources} sources` : downloading?.status === "RUNNING" ? `Downloading ${downloading.processed}/${downloading.limit}` : "Dashboard ready";
+  return <div className="head-status max-[850px]:hidden"><span className="pulse" aria-hidden="true" />{label}</div>;
+}
+
 export function DownloadProgress() {
   const status = useStatusPoll().downloads;
   if (!status?.run || status.run.status !== "RUNNING") return null;

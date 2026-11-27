@@ -8,6 +8,7 @@ export default function ErrorPage({ error, reset }: { error: Error & { digest?: 
       <p className="eyebrow">Cenblue / runtime error</p>
       <h1>Something went wrong<span aria-hidden="true">.</span></h1>
       <p className="page-description">The dashboard could not complete that request. Try again, then check Logs if the problem keeps happening.</p>
+      {process.env.NODE_ENV === "development" && error.message && <p className="error-line">{error.message}</p>}
       {error.digest && <p className="error-line">Digest {error.digest}</p>}
       <div className="actions">
         <button className="button primary" onClick={reset}>Try again</button>
