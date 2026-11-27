@@ -1,10 +1,11 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { chromium, type BrowserContext, type Locator, type Page } from "playwright";
+import { chromium, type BrowserContext, type Locator, type Page, type Response } from "playwright";
 import type { Logger } from "pino";
 import type { BrowserId } from "@cenblu/config";
 import { pruneDiagnosticFiles } from "@cenblu/shared/diagnostics";
+import { isBrowserProfileInUseError } from "@cenblu/shared/errors";
 import type { ExclusiveLease } from "@cenblu/shared/lease";
 import { detectXUsername } from "@cenblu/shared/x-identity";
 import { xPublisherSelectors } from "./selectors";
@@ -56,8 +57,8 @@ export function persistentContextOptions(options: PlaywrightPublisherOptions, he
 
 export function classifyBrowserLaunchError(error: unknown, browserName = "Browser"): PublisherError {
   const message = error instanceof Error ? error.message : String(error);
-  if (/profile.*in use|user data directory is already in use|processsingleton|opening in existing browser session|cannot create a process singleton/i.test(message)) {
-    return new PublisherError("PROFILE_IN_USE", `${browserName} profile is in use. Close its Cenblue profile window, then retry.`, false, true, { cause: error });
+  if (isBrowserProfileInUseError(error)) {
+    return new PublisherError("PROFILE_IN_USE", `${browserName} profile is in use. Close its Cenblue profile window and any background browser processes, then retry.`, false, true, { cause: error });
   }
   return new PublisherError("BROWSER_LAUNCH_FAILED", `Could not launch the configured browser profile: ${message}`, false, true, { cause: error });
 }
@@ -88,6 +89,10 @@ function comparableCaption(value: string): string {
 
 export function captionsMatch(actual: string, expected: string): boolean {
   return comparableCaption(actual) === comparableCaption(expected);
+}
+
+async function composerText(composer: Locator): Promise<string> {
+  return composer.evaluate((element) => element instanceof HTMLTextAreaElement ? element.value : element instanceof HTMLElement ? element.innerText : element.textContent ?? "").catch(() => "");
 }
 
 export function selectVisiblePublishButton(dialog: Locator): Locator {
@@ -236,12 +241,12 @@ export class XPlaywrightPublisher implements Publisher {
   }
 
   private async ensureCaption(composer: Locator, expected: string): Promise<void> {
-    const current = await composer.innerText().catch(() => "");
+    const current = await composerText(composer);
     if (!captionsMatch(current, expected)) {
       await composer.fill(expected);
       await composer.page().waitForTimeout(250);
     }
-    const verified = await composer.innerText().catch(() => "");
+    const verified = await composerText(composer);
     if (!captionsMatch(verified, expected)) throw new PublisherError("INVALID_CAPTION", `Composer caption verification failed before submission (expected ${Array.from(expected).length} characters, found ${Array.from(verified).length})`, false, true);
   }
 
@@ -312,10 +317,10 @@ export class XPlaywrightPublisher implements Publisher {
       this.assertActive(signal);
       await this.assertLoggedIn(page);
       await page.goto("https://x.com/compose/post", { waitUntil: "domcontentloaded", timeout: this.operationTimeoutMs });
-      const composer = page.locator(xPublisherSelectors.composer).first();
+      const dialog = page.locator(xPublisherSelectors.composerDialog).filter({ has: page.locator(xPublisherSelectors.composer) }).first();
+      const composer = dialog.locator(xPublisherSelectors.composer).first();
       try { await composer.waitFor({ state: "visible", timeout: this.operationTimeoutMs }); }
       catch (error) { throw new PublisherError("COMPOSER_SELECTOR", "X composer could not be located", true, false, { cause: error }); }
-      const dialog = page.locator(xPublisherSelectors.composerDialog).filter({ has: composer }).first();
       let attachment: Locator | null = null;
       if (input.mediaPath) {
         const mediaInput = dialog.locator(xPublisherSelectors.mediaInput).first();
@@ -335,18 +340,38 @@ export class XPlaywrightPublisher implements Publisher {
       await input.reportProgress?.("READY_TO_SUBMIT");
       await this.ensureCaption(composer, input.caption);
       await input.reportProgress?.("SUBMITTING");
+      let createTweetError: string | null = null;
+      let createdStatusId: string | null = null;
+      const onCreateTweet = (response: Response) => {
+        if (!/CreateTweet/i.test(response.url())) return;
+        void response.json().then((payload) => {
+          const message = Array.isArray(payload?.errors) ? payload.errors[0]?.message : null;
+          if (typeof message === "string" && message) { createTweetError = message; return; }
+          const result = payload?.data?.create_tweet?.tweet_results?.result;
+          const restId = result?.rest_id ?? result?.tweet?.rest_id;
+          if (typeof restId === "string" && restId) { createTweetError = null; createdStatusId = restId; }
+        }).catch(() => undefined);
+      };
+      page.on("response", onCreateTweet);
       activationMethod = await this.activatePublishButton(page, button, attachment);
       this.logger.info({ operation: "publisher.submission.activated", activationMethod, jobId: input.jobId, postId: input.platformPostId, elapsedMs: Date.now() - startedAt }, "Post submission activated");
       await input.reportProgress?.("CONFIRMING");
       const toast = page.locator(xPublisherSelectors.toast).first();
+      const confirmationDeadline = Date.now() + Math.min(uploadTimeoutMs, 5 * 60_000);
+      let confirmed = false;
       try {
-        await Promise.race([
-          toast.waitFor({ state: "visible", timeout: Math.min(uploadTimeoutMs, 5 * 60_000) }),
-          dialog.waitFor({ state: "hidden", timeout: Math.min(uploadTimeoutMs, 5 * 60_000) }),
-        ]);
+        while (Date.now() < confirmationDeadline) {
+          if (createTweetError) throw new PublisherError("UPLOAD_REJECTED", `X rejected the post: ${createTweetError}`, false, false);
+          if (createdStatusId || await dialog.isHidden().catch(() => false) || await toast.isVisible().catch(() => false)) { confirmed = true; break; }
+          await page.waitForTimeout(500);
+        }
+      } finally {
+        page.off("response", onCreateTweet);
       }
-      catch (error) { throw new PublisherError("CONFIRMATION_FAILED", "Could not confirm whether X published the post", false, true, { cause: error }); }
-      return statusResult(await toast.locator(xPublisherSelectors.statusLink).first().getAttribute("href").catch(() => null));
+      if (createTweetError) throw new PublisherError("UPLOAD_REJECTED", `X rejected the post: ${createTweetError}`, false, false);
+      if (!confirmed) throw new PublisherError("CONFIRMATION_FAILED", "Could not confirm whether X published the post", false, true);
+      if (createdStatusId) return statusResult(`/i/web/status/${createdStatusId}`);
+      return statusResult(await toast.locator(xPublisherSelectors.statusLink).first().getAttribute("href", { timeout: 5_000 }).catch(() => null));
     } catch (error) {
       await this.diagnostic(page, input, error, activationMethod);
       if (signal.aborted) throw new PublisherError("LEASE_LOST", "Publisher lost its job or browser lease while uploading", true, false, { cause: signal.reason });

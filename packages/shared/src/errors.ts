@@ -65,6 +65,20 @@ function codeOf(error: unknown): string | null {
   return null;
 }
 
+/** Return true when a Chromium launch error indicates the profile directory is already locked by another browser process. */
+export function isBrowserProfileInUseError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /profile.*in use|user data directory is already in use|processsingleton|opening in existing browser session|cannot create a process singleton/i.test(message);
+}
+
+/** Return true when a filesystem error indicates an open file or directory lock (common on Windows when a browser holds profile files). */
+export function isFileLockError(error: unknown): boolean {
+  const code = codeOf(error);
+  if (code === "EPERM" || code === "EBUSY" || code === "EACCES") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(EPERM|EBUSY|EACCES)\b|operation not permitted|resource busy or locked/i.test(message);
+}
+
 export function toUserMessage(error: unknown): string {
   if (error instanceof AppError) return error.userMessage;
   if (error instanceof ResourceBusyError) return USER_MESSAGES.RESOURCE_BUSY;

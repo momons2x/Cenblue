@@ -21,7 +21,7 @@ async function main(): Promise<void> {
     profileDirectory: identity ? resolve(config.repositoryRoot, identity.profilePath) : config.publisherProfilePath,
     browserId: identity ? identity.browserId as typeof config.publisherBrowserId : config.publisherBrowserId,
     browserExecutablePath: identity?.executablePath ?? config.publisherBrowserExecutablePath,
-    browserProfileDirectory: identity?.profileDirectory ?? config.publisherProfileDirectory,
+    browserProfileDirectory: identity ? identity.profileDirectory ?? undefined : config.publisherProfileDirectory,
     allowExternalProfile: config.playwrightAllowExternalProfile,
     lease: combineExclusiveLeases(capacityLease, browserLease),
     diagnosticsDirectory: config.logStoragePath,

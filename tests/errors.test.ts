@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { AppError, toUserMessage, userError } from "@cenblu/shared/errors";
+import { AppError, isBrowserProfileInUseError, isFileLockError, toUserMessage, userError } from "@cenblu/shared/errors";
 import { ResourceBusyError } from "@cenblu/shared/lease";
 
 describe("toUserMessage", () => {
@@ -45,5 +45,13 @@ describe("toUserMessage", () => {
     expect(toUserMessage(new Error("spawn ffmpeg ENOENT C:\\Users\\secret\\bin\\ffmpeg.exe"))).toBe("Something went wrong while handling that request. Check the Logs page for details.");
     expect(toUserMessage("plain string")).toBe("Something went wrong while handling that request. Check the Logs page for details.");
     expect(toUserMessage(undefined)).toBe("Something went wrong while handling that request. Check the Logs page for details.");
+  });
+
+  it("detects Chromium profile-in-use and Windows file lock errors", () => {
+    expect(isBrowserProfileInUseError(new Error("browserType.launchPersistentContext: Opening in existing browser session."))).toBe(true);
+    expect(isBrowserProfileInUseError(new Error("network timeout"))).toBe(false);
+    expect(isFileLockError(Object.assign(new Error("locked"), { code: "EPERM" }))).toBe(true);
+    expect(isFileLockError("EPERM: operation not permitted, rename 'a' -> 'b'")).toBe(true);
+    expect(isFileLockError("ENOENT: no such file")).toBe(false);
   });
 });

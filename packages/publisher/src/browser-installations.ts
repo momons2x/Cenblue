@@ -60,13 +60,19 @@ export async function validateChromiumExecutable(executablePath: string): Promis
   return path;
 }
 
+/** Build Chromium CLI arguments for manual profile sign-in, disabling background mode so closing the window releases profile locks. */
+export function chromiumLoginProfileArgs(userDataDirectory: string, profileDirectory?: string, url = "https://x.com/login"): string[] {
+  return [
+    `--user-data-dir=${resolve(userDataDirectory)}`,
+    "--disable-background-mode",
+    ...(profileDirectory ? [`--profile-directory=${profileDirectory}`] : []),
+    url,
+  ];
+}
+
 export async function openChromiumProfile(executablePath: string, userDataDirectory: string, profileDirectory?: string, url = "https://x.com/login"): Promise<void> {
   if (process.platform !== "win32") throw new Error("Dashboard browser setup is currently supported on Windows only.");
   const executable = await validateChromiumExecutable(executablePath);
-  const child = spawn(executable, [
-    `--user-data-dir=${resolve(userDataDirectory)}`,
-    ...(profileDirectory ? [`--profile-directory=${profileDirectory}`] : []),
-    url,
-  ], { detached: true, stdio: "ignore", windowsHide: false });
+  const child = spawn(executable, chromiumLoginProfileArgs(userDataDirectory, profileDirectory, url), { detached: true, stdio: "ignore", windowsHide: false });
   child.unref();
 }

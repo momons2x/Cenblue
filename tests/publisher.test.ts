@@ -4,7 +4,7 @@ import pino from "pino";
 import type { Locator } from "playwright";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma, PublishRepository, SourceAccountRepository, SourcePostRepository } from "@cenblu/database";
-import { automaticPublishingEnabled, calculateUploadTimeoutMs, captionsMatch, classifyBrowserLaunchError, cloneEdgeProfile, extractCaptionNames, isPointerInterceptionError, keyboardFallbackAllowed, LocalPublishMediaVerifier, persistentContextOptions, publishButtonReady, PublisherError, PublishService, resolveCaption, resolveFranchise, selectVisiblePublishButton, validateCaption, type CaptionSource, type Publisher } from "@cenblu/publisher";
+import { automaticPublishingEnabled, calculateUploadTimeoutMs, captionsMatch, chromiumLoginProfileArgs, classifyBrowserLaunchError, cloneEdgeProfile, extractCaptionNames, isPointerInterceptionError, keyboardFallbackAllowed, LocalPublishMediaVerifier, persistentContextOptions, publishButtonReady, PublisherError, PublishService, resolveCaption, resolveFranchise, selectVisiblePublishButton, validateCaption, type CaptionSource, type Publisher } from "@cenblu/publisher";
 
 const logger = pino({ level: "silent" });
 const videos = resolve("storage/temp/publisher-test/videos");
@@ -84,6 +84,14 @@ describe("publisher", () => {
     });
   });
 
+  it("disables background mode when opening a manual login browser profile", () => {
+    const args = chromiumLoginProfileArgs("storage/browser-profiles/collector/id-1", "Profile 2");
+    expect(args).toContain("--disable-background-mode");
+    expect(args).toContain(`--user-data-dir=${resolve("storage/browser-profiles/collector/id-1")}`);
+    expect(args).toContain("--profile-directory=Profile 2");
+    expect(args.at(-1)).toBe("https://x.com/login");
+  });
+
   it("does not treat generic challenge text as a browser launch failure", () => {
     expect(classifyBrowserLaunchError(new Error("generic challenge text"))).toMatchObject({ kind: "BROWSER_LAUNCH_FAILED" });
   });
@@ -99,8 +107,8 @@ describe("publisher", () => {
       },
     } as unknown as Locator;
     expect(selectVisiblePublishButton(dialog)).toBe(chosen);
-    expect(selector).toContain("tweetButton']:visible");
-    expect(selector).toContain("tweetButtonInline']:visible");
+    expect(selector).toContain("button:has-text('Post')");
+    expect(selector).toContain(":visible");
     expect(selectedFirst).toBe(true);
   });
 
