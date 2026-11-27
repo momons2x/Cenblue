@@ -6,7 +6,7 @@ import type { BrowserId } from "@cenblu/config";
 import type { CollectionOptions, SourceAccountInput } from "@cenblu/shared";
 import { pruneDiagnosticFiles } from "@cenblu/shared/diagnostics";
 import type { ExclusiveLease } from "@cenblu/shared/lease";
-import { AppError } from "@cenblu/shared/errors";
+import { AppError, isBrowserProfileInUseError } from "@cenblu/shared/errors";
 import { detectXUsername } from "@cenblu/shared/x-identity";
 import type { RawTimelinePost } from "./normalize";
 import { normalizeBookmarkedPost, normalizeTimelinePost } from "./normalize";
@@ -49,6 +49,17 @@ export function collectorBrowserLaunchOptions(options: PlaywrightTimelineBrowser
     ...(options.browserExecutablePath ? { executablePath: options.browserExecutablePath } : { channel: browserId }),
     args: options.browserProfileDirectory ? [`--profile-directory=${options.browserProfileDirectory}`] : undefined,
   };
+}
+
+/** Map Chromium profile-in-use launch failures into an actionable RESOURCE_BUSY AppError. */
+export function classifyCollectorLaunchError(error: unknown, browserName = "Browser"): unknown {
+  if (isBrowserProfileInUseError(error)) {
+    return new AppError("RESOURCE_BUSY", {
+      userMessage: `${browserName} profile is in use. Close its Cenblue profile window and any background browser processes, then retry.`,
+      cause: error,
+    });
+  }
+  return error;
 }
 
 function configuredProfilePath(path: string, repositoryRoot: string, label: string, allowExternal = false): string {
@@ -136,9 +147,13 @@ export class PlaywrightTimelineBrowser implements TimelineBrowser {
     } else if (!this.options.allowExternalProfile) await mkdir(this.profileDirectory, { recursive: true });
     const browserId = this.options.browserId ?? this.options.browserChannel ?? "msedge";
     this.logger.info({ operation: `${this.profileRole}.browser.launch.start`, browserId, profileDirectory: this.profileDirectory, browserProfileDirectory: this.options.browserProfileDirectory ?? null }, `Launching authenticated ${this.profileRole} browser profile`);
-    const context = await chromium.launchPersistentContext(this.profileDirectory, collectorBrowserLaunchOptions(this.options));
-    this.logger.info({ operation: `${this.profileRole}.browser.launch.complete`, browserId }, `Authenticated ${this.profileRole} browser profile launched`);
-    return context;
+    try {
+      const context = await chromium.launchPersistentContext(this.profileDirectory, collectorBrowserLaunchOptions(this.options));
+      this.logger.info({ operation: `${this.profileRole}.browser.launch.complete`, browserId }, `Authenticated ${this.profileRole} browser profile launched`);
+      return context;
+    } catch (error) {
+      throw classifyCollectorLaunchError(error, browserId);
+    }
   }
 
   private async assertLoggedIn(page: Page, navigateToProfile = false): Promise<string | null> {

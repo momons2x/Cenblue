@@ -2,6 +2,7 @@ import pino from "pino";
 import { resolve } from "node:path";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  classifyCollectorLaunchError,
   CollectionService,
   collectorBrowserLaunchOptions,
   normalizeTimelinePost,
@@ -14,6 +15,7 @@ import {
   type TimelineBrowser,
 } from "@cenblu/collector";
 import { prisma, SourceAccountRepository, SourcePostRepository, type SourceAccount } from "@cenblu/database";
+import { AppError } from "@cenblu/shared/errors";
 import type { SourceAccountInput } from "@cenblu/shared";
 
 const client = prisma;
@@ -238,5 +240,14 @@ describe("repositories and collection cycle", () => {
     const byId = new Map<string, SourceAccount>(records.map((record) => [record.id, record]));
     expect(byId.get(failing.id)?.lastCollectionError).toBe("fixture failure");
     expect(byId.get(working.id)?.lastCollectedAt).not.toBeNull();
+  });
+
+  it("maps profile-in-use launch failures to an actionable RESOURCE_BUSY AppError", () => {
+    const classified = classifyCollectorLaunchError(new Error("browserType.launchPersistentContext: Opening in existing browser session."), "brave");
+    expect(classified).toBeInstanceOf(AppError);
+    expect((classified as AppError).code).toBe("RESOURCE_BUSY");
+    expect((classified as AppError).userMessage).toContain("brave profile is in use");
+    const unrelated = new Error("missing binary");
+    expect(classifyCollectorLaunchError(unrelated, "brave")).toBe(unrelated);
   });
 });
